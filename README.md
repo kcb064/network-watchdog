@@ -37,38 +37,42 @@ Per-service checks:
 - **TrueNAS** — pool health (DEGRADED/FAULTED = critical), capacity warnings, every TrueNAS alert (SMART failures, scrub errors) pushed individually, disk temps, host CPU/RAM, reboot detection
 - **WAN** — ICMP ping loss/latency to 1.1.1.1 + 8.8.8.8, DNS via *your AdGuard and a public resolver separately* (so you know which broke), HTTP fetch
 
-## Quick start (Dockge on TrueNAS SCALE)
+## Quick start (Dockge — nothing to clone)
 
-1. Clone into your Dockge stacks directory:
+1. In Dockge: **+ Compose**, name it `network-watchdog`, and paste
+   [docker-compose.yml](https://raw.githubusercontent.com/kcb064/network-watchdog/main/docker-compose.yml).
 
-   ```bash
-   cd /mnt/<pool>/dockge/stacks
-   git clone https://github.com/kcb064/network-watchdog.git
-   cd network-watchdog
-   ```
+2. In the **.env** panel, paste
+   [.env.example](https://raw.githubusercontent.com/kcb064/network-watchdog/main/.env.example)
+   and uncomment/fill the services you run. **Setting a service's variables
+   turns its monitoring on** — no other configuration needed. WAN + Docker
+   monitoring are on by default.
 
-   (Updates later: `git pull`, then rebuild/redeploy the stack in Dockge.)
+3. **Deploy** (pulls the prebuilt multi-arch image
+   `ghcr.io/kcb064/network-watchdog:latest`), then open
+   `http://<nas-ip>:8787` and subscribe to your topic in the
+   [ntfy app](https://ntfy.sh/app).
 
-2. Create your env file and config:
+### Environment variables
 
-   ```bash
-   cp .env.example .env        # fill in credentials (see below)
-   mkdir -p config
-   cp config.example.yaml config/config.yaml   # enable your services
-   ```
+| Variables | Enables |
+|---|---|
+| `NTFY_TOPIC` (+ `NTFY_SERVER`, `NTFY_TOKEN`) | Push notifications |
+| `PUBLIC_URL` | Approve/Deny buttons inside notifications |
+| `UNIFI_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD` | UniFi monitoring |
+| `HA_URL`, `HA_TOKEN` (+ `HA_CONTAINER`) | Home Assistant monitoring (+ restart remediation) |
+| `ADGUARD_URL`, `ADGUARD_USERNAME`, `ADGUARD_PASSWORD` | AdGuard monitoring + protection re-enable |
+| `TRUENAS_URL`, `TRUENAS_API_KEY` | Pool health, alerts, capacity predictions |
+| `WATCHDOG_PASSWORD` | Dashboard basic auth (user `admin`) |
+| `HEARTBEAT_URL` | Dead man's switch (healthchecks.io) |
+| `REMEDIATION_MODE` | `tiered` (default) / `approve_all` / `off` |
+| `WAN_ENABLED`, `DOCKER_ENABLED`, `UNIFI_ENABLED`, `HA_ENABLED`, `ADGUARD_ENABLED`, `TRUENAS_ENABLED` | Explicit on/off overrides |
 
-   (If you skip the config copy, the container seeds it on first start —
-   edit and redeploy.)
-
-3. In Dockge: the stack appears → **Deploy**. It pulls the prebuilt
-   multi-arch image `ghcr.io/kcb064/network-watchdog:latest` (amd64/arm64) —
-   no build wait. To build from source instead, swap the `image:` line in
-   `docker-compose.yml` for `build: .`.
-
-4. Open the dashboard: `http://<nas-ip>:8787`
-
-5. Subscribe to your topic in the [ntfy app](https://ntfy.sh/app)
-   (use the same topic string as `NTFY_TOPIC` in `.env`).
+Fine-grained tuning (thresholds, poll intervals, per-action remediation
+tiers, container exclude lists) lives in an optional YAML file: the container
+drops `config.example.yaml` into the stack's `./config` folder — copy it to
+`config/config.yaml`, edit, redeploy. Environment variables always win over
+YAML.
 
 ### Credentials to create
 
@@ -80,31 +84,26 @@ Per-service checks:
 | TrueNAS | API key | UI → user icon → API Keys |
 | ntfy | Just pick a long random topic name | — |
 
-Set `server.public_url` in `config/config.yaml` to `http://<nas-ip>:8787` so the
-Approve/Deny buttons in notifications work from your phone (on LAN/VPN).
+### Validate your credentials
 
-### Validate before deploying
+After deploying, open the container's terminal in Dockge (`>_` on the
+container) and run:
 
 ```bash
-docker compose run --rm watchdog python -m netwatch --config /config/config.yaml --data /data --doctor
+python -m netwatch --config /config/config.yaml --data /tmp --doctor
 ```
 
 `--doctor` tries every enabled service once and tells you exactly which
-credential or URL is wrong.
+credential or URL is wrong. (The dashboard's Watchdog card shows the same
+collector errors live.)
 
 ### Updating
 
-Every push to `main` publishes a fresh `:latest` image via GitHub Actions.
-On the NAS:
-
-```bash
-git pull                                  # pick up compose/config changes
-docker compose pull && docker compose up -d
-```
-
-…or just hit **Update** on the stack in Dockge. Pin a specific version with
-the `sha-<commit>` tags (or `vX.Y.Z` once releases are tagged) instead of
-`:latest` if you want updates only when you choose.
+Every push to `main` publishes a fresh `:latest` image via GitHub Actions —
+just hit **Update** on the stack in Dockge (or
+`docker compose pull && docker compose up -d`). Pin a `sha-<commit>` tag (or
+`vX.Y.Z` once releases are tagged) instead of `:latest` if you want updates
+only when you choose.
 
 ## Remediation model
 

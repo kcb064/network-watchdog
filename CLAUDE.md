@@ -39,9 +39,14 @@ needs the Linux socket, fails gracefully here).
 
 - Tests cover the pure logic; collectors are tested via their parse/classify
   helpers only (no network mocking).
-- `config.example.yaml` is copied into the image and seeded to /config on
-  first run. Don't put `${...}` patterns in YAML comments — the env
-  interpolator runs over the whole file.
+- Config is env-first: `apply_env_overrides` in config.py maps plain env vars
+  (UNIFI_URL, HA_TOKEN, …) onto the config and auto-enables a service when any
+  of its vars is set; `<X>_ENABLED` is the explicit override and env always
+  beats YAML. config.yaml is optional advanced tuning; the container seeds
+  only a `config.example.yaml` reference copy into /config. Kevin deploys by
+  pasting docker-compose.yml into Dockge + filling its .env panel (no clone).
+  Don't put `${...}` patterns in YAML comments — the env interpolator runs
+  over the whole file.
 - DB schema changes: SCHEMA in db.py uses CREATE IF NOT EXISTS only; for
   existing deployments add ALTER-based migration or bump a schema version.
 - deps in requirements.txt are range-pinned; pydantic comes via fastapi.

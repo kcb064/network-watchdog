@@ -16,6 +16,14 @@ from .remediate import Remediator
 
 
 def setup_logging(level: str) -> None:
+    # Windows consoles may default to a legacy codepage that can't print
+    # the dashes/emoji used in messages.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -27,20 +35,19 @@ def setup_logging(level: str) -> None:
 
 
 def ensure_config_file(path: Path) -> None:
-    """First run inside the container: seed /config with the example."""
-    if path.exists():
-        return
+    """Drop a reference copy of the example next to where config.yaml would go.
+
+    config.yaml itself is optional — most deployments configure everything via
+    environment variables. Users who want advanced tuning copy the example.
+    """
     example = Path(__file__).parent.parent / "config.example.yaml"
-    if example.exists():
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(example, path)
-            logging.getLogger("netwatch").warning(
-                "No config found — copied example to %s. Edit it (and your .env), "
-                "then restart the stack.", path,
-            )
-        except OSError as exc:
-            logging.getLogger("netwatch").warning("could not seed config: %s", exc)
+    if not example.exists():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(example, path.parent / "config.example.yaml")
+    except OSError as exc:
+        logging.getLogger("netwatch").debug("could not seed config example: %s", exc)
 
 
 async def doctor(cfg, db: Database) -> int:

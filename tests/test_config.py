@@ -51,3 +51,41 @@ def test_unknown_keys_ignored(tmp_path):
     p.write_text("server:\n  port: 1234\n  bogus_key: hi\nwhatever: 1\n", encoding="utf-8")
     cfg = load_config(p)
     assert cfg.server.port == 1234
+
+
+def test_env_vars_enable_service_without_yaml(tmp_path, monkeypatch):
+    monkeypatch.setenv("HA_URL", "http://10.0.0.5:8123")
+    monkeypatch.setenv("HA_TOKEN", "tok")
+    monkeypatch.delenv("UNIFI_URL", raising=False)
+    cfg = load_config(tmp_path / "absent.yaml")
+    assert cfg.home_assistant.enabled is True
+    assert cfg.home_assistant.url == "http://10.0.0.5:8123"
+    assert cfg.home_assistant.token == "tok"
+    assert cfg.unifi.enabled is False
+
+
+def test_explicit_enabled_flag_wins(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADGUARD_URL", "http://10.0.0.6:3000")
+    monkeypatch.setenv("ADGUARD_ENABLED", "false")
+    monkeypatch.setenv("WAN_ENABLED", "false")
+    cfg = load_config(tmp_path / "absent.yaml")
+    assert cfg.adguard.enabled is False
+    assert cfg.adguard.url == "http://10.0.0.6:3000"  # value still applied
+    assert cfg.wan.enabled is False
+
+
+def test_env_overrides_beat_yaml(tmp_path, monkeypatch):
+    p = tmp_path / "config.yaml"
+    p.write_text(
+        "unifi:\n  enabled: false\n  url: https://old.local\n"
+        "remediation:\n  mode: approve_all\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("UNIFI_URL", "https://192.168.9.1")
+    monkeypatch.setenv("REMEDIATION_MODE", "off")
+    monkeypatch.setenv("PUBLIC_URL", "http://nas:8787")
+    cfg = load_config(p)
+    assert cfg.unifi.enabled is True
+    assert cfg.unifi.url == "https://192.168.9.1"
+    assert cfg.remediation.mode == "off"
+    assert cfg.server.public_url == "http://nas:8787"

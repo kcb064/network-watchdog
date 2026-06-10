@@ -1,6 +1,10 @@
-# Network Watchdog configuration.
-# Secrets use dollar-brace placeholders and come from the .env file next to
-# docker-compose.yml. After editing, restart the container (redeploy in Dockge).
+# Network Watchdog ADVANCED configuration — entirely OPTIONAL.
+# Normal setups configure everything with environment variables in the
+# compose .env (see .env.example); this file is for fine-tuning thresholds,
+# poll intervals, and per-action remediation tiers.
+# To use: copy to config/config.yaml, edit, redeploy the stack.
+# Environment variables always override values set here.
+# Secrets may use dollar-brace placeholders, interpolated from the environment.
 
 server:
   port: 8787

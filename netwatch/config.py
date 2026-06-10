@@ -168,6 +168,64 @@ def interpolate_env(text: str) -> tuple[str, set[str]]:
     return _ENV_RE.sub(sub, text), missing
 
 
+def _bool(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+# env var -> (config section attr on Config, field). Setting any var of a
+# service enables that service unless an explicit <X>_ENABLED says otherwise.
+_SERVICE_ENV = {
+    "unifi": {"UNIFI_URL": "url", "UNIFI_USERNAME": "username",
+              "UNIFI_PASSWORD": "password", "UNIFI_SITE": "site"},
+    "home_assistant": {"HA_URL": "url", "HA_TOKEN": "token",
+                       "HA_CONTAINER": "container_name"},
+    "adguard": {"ADGUARD_URL": "url", "ADGUARD_USERNAME": "username",
+                "ADGUARD_PASSWORD": "password"},
+    "truenas": {"TRUENAS_URL": "url", "TRUENAS_API_KEY": "api_key"},
+}
+_ENABLED_ENV = {
+    "unifi": "UNIFI_ENABLED", "home_assistant": "HA_ENABLED",
+    "adguard": "ADGUARD_ENABLED", "truenas": "TRUENAS_ENABLED",
+    "wan": "WAN_ENABLED", "docker": "DOCKER_ENABLED",
+}
+_SIMPLE_ENV = {
+    "NTFY_SERVER": ("ntfy", "server"), "NTFY_TOPIC": ("ntfy", "topic"),
+    "NTFY_TOKEN": ("ntfy", "token"),
+    "PUBLIC_URL": ("server", "public_url"),
+    "WATCHDOG_PASSWORD": ("server", "password"),
+    "HEARTBEAT_URL": ("server", "heartbeat_url"),
+    "REMEDIATION_MODE": ("remediation", "mode"),
+}
+
+
+def apply_env_overrides(cfg: Config) -> None:
+    """Compose-only deployment mode: configure everything with plain env vars.
+
+    Env vars always win over config.yaml. A service is auto-enabled when any
+    of its env vars is set (non-empty); <X>_ENABLED=true/false is explicit.
+    """
+    for env_name, (section_name, attr) in _SIMPLE_ENV.items():
+        val = os.environ.get(env_name)
+        if val:
+            setattr(getattr(cfg, section_name), attr, val)
+
+    for section_name, mapping in _SERVICE_ENV.items():
+        section = getattr(cfg, section_name)
+        touched = False
+        for env_name, attr in mapping.items():
+            val = os.environ.get(env_name)
+            if val:
+                setattr(section, attr, val)
+                touched = True
+        if touched:
+            section.enabled = True
+
+    for section_name, env_name in _ENABLED_ENV.items():
+        val = os.environ.get(env_name)
+        if val:
+            getattr(cfg, section_name).enabled = _bool(val)
+
+
 def load_config(path: str | Path | None) -> Config:
     data: dict = {}
     missing: set[str] = set()
@@ -176,10 +234,11 @@ def load_config(path: str | Path | None) -> Config:
         raw, missing = interpolate_env(raw)
         data = yaml.safe_load(raw) or {}
     elif path:
-        log.warning("Config file %s not found — running with defaults (WAN checks only)", path)
+        log.info("No config file at %s — using defaults + environment variables", path)
 
     cfg = Config(**data)
     cfg.missing_env = missing
     for name in sorted(missing):
         log.warning("Environment variable %s referenced in config but not set", name)
+    apply_env_overrides(cfg)
     return cfg
