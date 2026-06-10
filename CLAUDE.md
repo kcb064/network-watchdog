@@ -45,3 +45,7 @@ needs the Linux socket, fails gracefully here).
 - DB schema changes: SCHEMA in db.py uses CREATE IF NOT EXISTS only; for
   existing deployments add ALTER-based migration or bump a schema version.
 - deps in requirements.txt are range-pinned; pydantic comes via fastapi.
+- CI (.github/workflows/ci.yml): pytest on push/PR; pushes to main publish
+  multi-arch (amd64/arm64) image to ghcr.io/kcb064/network-watchdog with
+  :latest + :sha-* tags (v* tags add semver). Repo + image are PUBLIC (MIT).
+  Kevin's NAS deploys the GHCR image via Dockge, not a local build.

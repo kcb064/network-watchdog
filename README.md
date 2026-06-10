@@ -1,5 +1,8 @@
 # 🐕 Network Watchdog
 
+[![CI](https://github.com/kcb064/network-watchdog/actions/workflows/ci.yml/badge.svg)](https://github.com/kcb064/network-watchdog/actions/workflows/ci.yml)
+[![Image](https://img.shields.io/badge/ghcr.io-kcb064%2Fnetwork--watchdog-blue)](https://github.com/kcb064/network-watchdog/pkgs/container/network-watchdog)
+
 Self-hosted homelab health monitor for a TrueNAS SCALE + Dockge setup. Watches
 **UniFi, Home Assistant, AdGuard Home, Docker containers, internet/WAN quality,
 and the NAS itself**, detects problems as they happen, **predicts** ones that
@@ -57,7 +60,10 @@ Per-service checks:
    (If you skip the config copy, the container seeds it on first start —
    edit and redeploy.)
 
-3. In Dockge: the stack appears → **Deploy**. It builds the image locally.
+3. In Dockge: the stack appears → **Deploy**. It pulls the prebuilt
+   multi-arch image `ghcr.io/kcb064/network-watchdog:latest` (amd64/arm64) —
+   no build wait. To build from source instead, swap the `image:` line in
+   `docker-compose.yml` for `build: .`.
 
 4. Open the dashboard: `http://<nas-ip>:8787`
 
@@ -85,6 +91,20 @@ docker compose run --rm watchdog python -m netwatch --config /config/config.yaml
 
 `--doctor` tries every enabled service once and tells you exactly which
 credential or URL is wrong.
+
+### Updating
+
+Every push to `main` publishes a fresh `:latest` image via GitHub Actions.
+On the NAS:
+
+```bash
+git pull                                  # pick up compose/config changes
+docker compose pull && docker compose up -d
+```
+
+…or just hit **Update** on the stack in Dockge. Pin a specific version with
+the `sha-<commit>` tags (or `vX.Y.Z` once releases are tagged) instead of
+`:latest` if you want updates only when you choose.
 
 ## Remediation model
 
@@ -132,6 +152,9 @@ python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest tests        # 52 tests, pure-logic core
 .venv/bin/python -m netwatch --config config.example.yaml --data data
 ```
+
+CI (`.github/workflows/ci.yml`) runs the tests on every push/PR and publishes
+the multi-arch image to GHCR on pushes to `main` and `v*` tags.
 
 Architecture:
 

@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.source="https://github.com/kcb064/network-watchdog" \
+      org.opencontainers.image.description="Self-hosted homelab health monitor: UniFi, Home Assistant, AdGuard, Docker, TrueNAS, WAN" \
+      org.opencontainers.image.licenses="MIT"
+
 WORKDIR /app
 
 COPY requirements.txt .

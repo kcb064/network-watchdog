@@ -1,14 +1,20 @@
-# Network Watchdog — drop this folder into your Dockge stacks directory
-# (e.g. /mnt/<pool>/dockge/stacks/network-watchdog) and deploy from Dockge.
+# Network Watchdog — deploys from the prebuilt image on GHCR.
+# Drop this folder (or just this file) into your Dockge stacks directory,
+# e.g. /mnt/<pool>/dockge/stacks/network-watchdog, and deploy from Dockge.
 #
 # 1. Copy .env.example to .env and fill in your credentials.
 # 2. Copy config.example.yaml to config/config.yaml and enable your services
 #    (the container seeds config/config.yaml from the example on first start).
 # 3. Deploy. Dashboard: http://<nas-ip>:8787
+#
+# Update later with: docker compose pull && docker compose up -d
+# (or Dockge's Update button).
 
 services:
   watchdog:
-    build: .
+    image: ghcr.io/kcb064/network-watchdog:latest
+    # To build from source instead of pulling the published image:
+    # build: .
     container_name: network-watchdog
     restart: unless-stopped
     ports:
