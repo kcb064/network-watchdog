@@ -230,8 +230,12 @@ class Engine:
         # An open incident may gain a remediation option later (e.g. AdGuard
         # auto-re-enable grace period elapsing), so re-consider while open.
         if row["incident_id"] is not None and row["status"] != OK:
+            # Failed attempts don't block retry forever: the post-failure
+            # cooldown downgrades the next attempt to an approval request, and
+            # an expired approval frees the slot for a fresh auto attempt.
             has_action = self.db.query_one(
-                "SELECT id FROM actions WHERE incident_id=? AND status NOT IN ('expired','denied')",
+                "SELECT id FROM actions WHERE incident_id=? "
+                "AND status NOT IN ('expired','denied','failed')",
                 (row["incident_id"],),
             )
             if not has_action:
