@@ -131,8 +131,17 @@ Flip the risky-but-effective ones to auto:
 REMEDIATION_OVERRIDES=unifi.restart_device=auto,unifi.poe_cycle=auto,wan.power_cycle=auto
 ```
 
-All auto actions respect the 30-min per-target cooldown, so a fix that isn't
-working escalates to you instead of looping.
+**Repeat handling** distinguishes two classes of fixes:
+
+- **Lifeline fixes** (`adguard.restart_ha_addon`, `wan.power_cycle`,
+  `unifi.poe_cycle`, `unifi.restart_device`) restore the connectivity that
+  notifications themselves need — so they never wait on an approval that
+  can't be delivered mid-outage. They auto-retry with doubling backoff
+  (30 min → 1 h → …), up to `max_auto_attempts` (default 3) per 6 h, and only
+  then fall back to an approval request (queued, delivered when possible).
+- **Everything else** (e.g. container restarts) downgrades to an approval
+  after one auto attempt per 30 min — a fix that isn't sticking should get a
+  human look before it loops.
 
 - Switch to `approve_all` (everything asks) or `off` (suggest-only) globally,
   or override per action in `remediation.overrides`.

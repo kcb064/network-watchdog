@@ -121,6 +121,10 @@ class RemediationConfig(_Base):
     overrides: dict[str, str] = Field(default_factory=dict)  # action id -> auto|approve|off
     never_touch: list[str] = Field(default_factory=lambda: ["dockge", "network-watchdog"])
     auto_cooldown_minutes: int = 30   # min gap between auto runs of same action+target
+    # Lifeline (connectivity-restoring) fixes retry automatically with doubling
+    # backoff up to this many attempts per 6 h before asking for approval —
+    # an approval request can't reach you while DNS/WAN itself is down.
+    max_auto_attempts: int = 3
     approval_ttl_minutes: int = 60
     verify_minutes: int = 10          # escalate if incident still open this long after a fix
 

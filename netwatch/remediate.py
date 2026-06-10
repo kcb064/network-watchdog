@@ -29,6 +29,11 @@ class ActionSpec:
     label: Callable[[dict], str]
     matcher: Callable[[CheckResult, "Remediator"], dict | None]
     executor: Callable  # async (remediator, ctx) -> str
+    # Lifeline fixes restore the connectivity that notifications themselves
+    # depend on (DNS, WAN, network gear). When repeated, they back off and
+    # retry automatically instead of degrading to an approval request that
+    # may be undeliverable mid-outage.
+    lifeline: bool = False
 
 
 # -- matchers -------------------------------------------------------------------
@@ -172,23 +177,23 @@ SPECS: list[ActionSpec] = [
     ActionSpec(
         "unifi.restart_device", "approve",
         lambda c: f"Reboot UniFi device {c.get('name', '?')}",
-        _match_restart_device, _exec_restart_device,
+        _match_restart_device, _exec_restart_device, lifeline=True,
     ),
     ActionSpec(
         "unifi.poe_cycle", "approve",
         lambda c: f"PoE power-cycle {c.get('name', '?')} "
                   f"(port {c.get('port_idx', '?')} on upstream switch)",
-        _match_poe_cycle, _exec_poe_cycle,
+        _match_poe_cycle, _exec_poe_cycle, lifeline=True,
     ),
     ActionSpec(
         "adguard.restart_ha_addon", "auto",
         lambda c: "Restart the AdGuard Home add-on via Home Assistant",
-        _match_ha_addon_restart, _exec_ha_addon_restart,
+        _match_ha_addon_restart, _exec_ha_addon_restart, lifeline=True,
     ),
     ActionSpec(
         "wan.power_cycle", "approve",
         lambda c: f"Power-cycle the modem/router ({c.get('entity', '?')})",
-        _match_wan_power_cycle, _exec_wan_power_cycle,
+        _match_wan_power_cycle, _exec_wan_power_cycle, lifeline=True,
     ),
 ]
 
@@ -216,9 +221,16 @@ class Remediator:
             tier = "approve"
         return tier
 
-    def _cooldown_active(self, action_id: str, target: str, now: float) -> bool:
-        last = float(self.db.kv_get(f"act_cd:{action_id}:{target}") or 0)
-        return now - last < self.cfg.remediation.auto_cooldown_minutes * 60
+    ATTEMPT_WINDOW = 6 * 3600  # attempts older than this no longer count
+
+    def _attempts(self, action_id: str, target: str, now: float) -> list[float]:
+        hist = self.db.kv_get_json(f"act_hist:{action_id}:{target}", [])
+        return [t for t in hist if now - t < self.ATTEMPT_WINDOW]
+
+    def _record_attempt(self, action_id: str, target: str, now: float) -> None:
+        hist = self._attempts(action_id, target, now)
+        hist.append(now)
+        self.db.kv_set_json(f"act_hist:{action_id}:{target}", hist)
 
     # -- planning -----------------------------------------------------------------
 
@@ -238,9 +250,25 @@ class Remediator:
             tier = self.resolve_tier(spec.id, spec.default_tier, force_approve)
             if tier == "off":
                 return ("off", spec.label(ctx))
-            if tier == "auto" and self._cooldown_active(spec.id, target, now):
-                log.info("%s on %s on cooldown — requiring approval", spec.id, target)
-                tier = "approve"
+
+            if tier == "auto":
+                attempts = self._attempts(spec.id, target, now)
+                if attempts:
+                    cooldown = self.cfg.remediation.auto_cooldown_minutes * 60
+                    if spec.lifeline:
+                        # Approval may be undeliverable while DNS/WAN is the
+                        # thing that's broken — keep retrying with doubling
+                        # backoff until the attempt budget runs out.
+                        if len(attempts) >= self.cfg.remediation.max_auto_attempts:
+                            log.warning("%s on %s: %d auto attempts exhausted — "
+                                        "requiring approval", spec.id, target, len(attempts))
+                            tier = "approve"
+                        elif now - max(attempts) < cooldown * 2 ** (len(attempts) - 1):
+                            return None  # back off quietly; reconsidered next poll
+                    elif now - max(attempts) < cooldown:
+                        log.info("%s on %s on cooldown — requiring approval",
+                                 spec.id, target)
+                        tier = "approve"
             if auto_only and tier != "auto":
                 return None
 
@@ -282,7 +310,7 @@ class Remediator:
             "UPDATE actions SET status=?, executed=?, result=?, verify_deadline=? WHERE id=?",
             (status, now, detail, verify_deadline, act["id"]),
         )
-        self.db.kv_set(f"act_cd:{act['action']}:{act['target']}", str(now))
+        self._record_attempt(act["action"], act["target"], now)
         log.warning("action %s on %s: %s (%s)", act["action"], act["target"], status, detail)
         self.notifier.action_result(act, ok, detail)
         return ok, detail

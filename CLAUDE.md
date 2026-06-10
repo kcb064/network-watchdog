@@ -26,7 +26,10 @@ needs the Linux socket, fails gracefully here).
   `watchdog.collector.<id>` warn checks.
 - `netwatch/remediate.py` — `SPECS` registry. Tiers: auto/approve/off; global
   modes tiered/approve_all/off. Approval = single-use token, ntfy http-action
-  buttons POST to `/api/actions/{id}/approve`.
+  buttons POST to `/api/actions/{id}/approve`. `lifeline=True` specs
+  (DNS/WAN/UniFi fixes) auto-retry with doubling backoff instead of
+  downgrading to approval on cooldown — approvals are undeliverable when the
+  notification path itself is what broke.
 - `netwatch/predict.py` — pure math (`linear_fit`, `fill_eta_days`,
   `latency_anomaly`) + `_manage()` which owns prediction-kind incidents.
 - `netwatch/notify.py` — ntfy JSON publish via persistent SQLite queue with

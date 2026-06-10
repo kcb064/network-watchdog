@@ -102,7 +102,7 @@ def test_never_touch_blocks_match(env):
 
 def test_cooldown_downgrades_to_approval(env):
     db, cfg, docker, rem, incident = env
-    db.kv_set("act_cd:docker.restart_container:plex", str(time.time()))
+    db.kv_set_json("act_hist:docker.restart_container:plex", [time.time()])
     plan = asyncio.run(rem.consider(incident, crash_check("plex")))
     assert plan[0] == "approve"
 
@@ -256,9 +256,71 @@ def test_auto_only_skips_approval_tier_without_creating_action(env):
 
 def test_auto_only_respects_cooldown(env):
     db, cfg, docker, rem, incident = env
-    db.kv_set("act_cd:docker.restart_container:plex", str(time.time()))
+    db.kv_set_json("act_hist:docker.restart_container:plex", [time.time()])
     plan = asyncio.run(rem.consider(incident, crash_check(), auto_only=True))
     assert plan is None
+
+
+def addon_down_check():
+    return CheckResult(
+        "adguard.api", FAIL, "unreachable",
+        meta={"remediation": {"kind": "ha_addon_restart", "addon": "a0d7b954_adguard",
+                              "name": "AdGuard Home add-on"}},
+    )
+
+
+def test_lifeline_backs_off_instead_of_asking(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["ha"] = FakeHA()
+    db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on",
+                   [time.time() - 60])  # 1 min ago, cooldown is 30 min
+    plan = asyncio.run(rem.consider(incident, addon_down_check()))
+    assert plan is None  # waiting, NOT downgraded to an undeliverable approval
+    assert db.query("SELECT * FROM actions") == []
+
+
+def test_lifeline_retries_auto_after_backoff(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["ha"] = FakeHA()
+    db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on",
+                   [time.time() - 31 * 60])  # past the 30-min gap
+    plan = asyncio.run(rem.consider(incident, addon_down_check()))
+    assert plan is not None and plan[0] == "auto"
+
+
+def test_lifeline_second_gap_doubles(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["ha"] = FakeHA()
+    now = time.time()
+    # two attempts; second was 45 min ago — required gap is now 60 min
+    db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on",
+                   [now - 120 * 60, now - 45 * 60])
+    assert asyncio.run(rem.consider(incident, addon_down_check())) is None
+    # ...but a 61-min-old second attempt clears it
+    db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on",
+                   [now - 120 * 60, now - 61 * 60])
+    plan = asyncio.run(rem.consider(incident, addon_down_check()))
+    assert plan is not None and plan[0] == "auto"
+
+
+def test_lifeline_exhausted_falls_back_to_approval(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["ha"] = FakeHA()
+    now = time.time()
+    db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on",
+                   [now - 3 * 3600, now - 2 * 3600, now - 3600])
+    plan = asyncio.run(rem.consider(incident, addon_down_check()))
+    assert plan is not None and plan[0] == "approve"
+
+
+def test_lifeline_old_attempts_age_out(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["ha"] = FakeHA()
+    now = time.time()
+    db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on",
+                   [now - 7 * 3600, now - 8 * 3600, now - 9 * 3600])  # outside 6 h window
+    plan = asyncio.run(rem.consider(incident, addon_down_check()))
+    assert plan is not None and plan[0] == "auto"
 
 
 def test_wan_power_cycle_needs_ha_collector(env):

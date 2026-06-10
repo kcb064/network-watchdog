@@ -129,6 +129,10 @@ remediation:
   #    unifi.restart_device: off
   never_touch: ["dockge", "network-watchdog"]   # containers never auto-restarted
   auto_cooldown_minutes: 30   # same auto-fix won't repeat within this window
+  # Connectivity-restoring ("lifeline") fixes retry automatically with
+  # doubling backoff up to this many attempts per 6 h before asking for
+  # approval (approvals may be undeliverable while DNS/WAN is down):
+  max_auto_attempts: 3
   approval_ttl_minutes: 60
   verify_minutes: 10          # escalate if the problem persists after a fix
 
