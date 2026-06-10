@@ -6,6 +6,7 @@ Global modes: tiered (defaults apply) | approve_all | off
 """
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import json
 import logging
@@ -69,6 +70,33 @@ def _match_restart_device(check: CheckResult, rem: "Remediator") -> dict | None:
     return dict(ctx)
 
 
+def _match_poe_cycle(check: CheckResult, rem: "Remediator") -> dict | None:
+    ctx = (check.meta.get("remediation") or {})
+    if ctx.get("kind") != "poe_cycle" or "unifi" not in rem.collectors:
+        return None
+    if not ctx.get("switch_mac") or not ctx.get("port_idx"):
+        return None
+    return dict(ctx)
+
+
+def _match_ha_addon_restart(check: CheckResult, rem: "Remediator") -> dict | None:
+    ctx = (check.meta.get("remediation") or {})
+    if ctx.get("kind") != "ha_addon_restart" or "ha" not in rem.collectors:
+        return None
+    if not ctx.get("addon"):
+        return None
+    return dict(ctx)
+
+
+def _match_wan_power_cycle(check: CheckResult, rem: "Remediator") -> dict | None:
+    ctx = (check.meta.get("remediation") or {})
+    if ctx.get("kind") != "wan_power_cycle" or "ha" not in rem.collectors:
+        return None
+    if not ctx.get("entity"):
+        return None
+    return dict(ctx)
+
+
 # -- executors ------------------------------------------------------------------
 
 async def _exec_restart_container(rem: "Remediator", ctx: dict) -> str:
@@ -93,6 +121,38 @@ async def _exec_restart_device(rem: "Remediator", ctx: dict) -> str:
     return await rem.collectors["unifi"].restart_device(ctx["mac"])
 
 
+async def _exec_poe_cycle(rem: "Remediator", ctx: dict) -> str:
+    return await rem.collectors["unifi"].power_cycle_port(
+        ctx["switch_mac"], ctx["port_idx"]
+    )
+
+
+async def _exec_ha_addon_restart(rem: "Remediator", ctx: dict) -> str:
+    return await rem.collectors["ha"].restart_addon(ctx["addon"])
+
+
+async def _exec_wan_power_cycle(rem: "Remediator", ctx: dict) -> str:
+    ha = rem.collectors["ha"]
+    entity = ctx["entity"]
+    domain = entity.split(".", 1)[0]
+    off_s = rem.cfg.wan.power_cycle_off_seconds
+    await ha.call_service(domain, "turn_off", {"entity_id": entity})
+    await asyncio.sleep(off_s)
+    # Failing to power back ON would leave the modem dead — retry hard.
+    last_exc: Exception | None = None
+    for _ in range(4):
+        try:
+            await ha.call_service(domain, "turn_on", {"entity_id": entity})
+            return f"power-cycled {entity} (off {off_s}s, back on)"
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            await asyncio.sleep(5)
+    raise RuntimeError(
+        f"{entity} was turned OFF but could not be turned back ON: {last_exc}. "
+        "Turn it on manually!"
+    )
+
+
 SPECS: list[ActionSpec] = [
     ActionSpec(
         "docker.restart_container", "auto",
@@ -113,6 +173,22 @@ SPECS: list[ActionSpec] = [
         "unifi.restart_device", "approve",
         lambda c: f"Reboot UniFi device {c.get('name', '?')}",
         _match_restart_device, _exec_restart_device,
+    ),
+    ActionSpec(
+        "unifi.poe_cycle", "approve",
+        lambda c: f"PoE power-cycle {c.get('name', '?')} "
+                  f"(port {c.get('port_idx', '?')} on upstream switch)",
+        _match_poe_cycle, _exec_poe_cycle,
+    ),
+    ActionSpec(
+        "adguard.restart_ha_addon", "auto",
+        lambda c: "Restart the AdGuard Home add-on via Home Assistant",
+        _match_ha_addon_restart, _exec_ha_addon_restart,
+    ),
+    ActionSpec(
+        "wan.power_cycle", "approve",
+        lambda c: f"Power-cycle the modem/router ({c.get('entity', '?')})",
+        _match_wan_power_cycle, _exec_wan_power_cycle,
     ),
 ]
 

@@ -72,6 +72,9 @@ class AdguardConfig(_Base):
     # N>0 = auto re-enable after N minutes disabled (gives you room to test things)
     auto_reenable_after_minutes: int = 30
     avg_processing_warn_ms: float = 300.0
+    # If AdGuard runs as a Home Assistant add-on, its slug (e.g.
+    # "a0d7b954_adguard") lets the watchdog restart it via HA when it dies.
+    ha_addon: str = ""
 
 
 class TruenasConfig(_Base):
@@ -95,6 +98,10 @@ class WanConfig(_Base):
     )
     loss_warn_pct: float = 10.0
     loss_fail_pct: float = 60.0
+    # HA switch/outlet entity powering the modem (e.g. "switch.modem_plug").
+    # When the internet is hard-down, the watchdog can power-cycle it via HA.
+    power_cycle_entity: str = ""
+    power_cycle_off_seconds: int = 15
 
 
 class DockerConfig(_Base):
@@ -180,7 +187,7 @@ _SERVICE_ENV = {
     "home_assistant": {"HA_URL": "url", "HA_TOKEN": "token",
                        "HA_CONTAINER": "container_name"},
     "adguard": {"ADGUARD_URL": "url", "ADGUARD_USERNAME": "username",
-                "ADGUARD_PASSWORD": "password"},
+                "ADGUARD_PASSWORD": "password", "ADGUARD_HA_ADDON": "ha_addon"},
     "truenas": {"TRUENAS_URL": "url", "TRUENAS_API_KEY": "api_key"},
 }
 _ENABLED_ENV = {
@@ -195,6 +202,7 @@ _SIMPLE_ENV = {
     "WATCHDOG_PASSWORD": ("server", "password"),
     "HEARTBEAT_URL": ("server", "heartbeat_url"),
     "REMEDIATION_MODE": ("remediation", "mode"),
+    "WAN_POWER_CYCLE_ENTITY": ("wan", "power_cycle_entity"),
 }
 
 
@@ -224,6 +232,16 @@ def apply_env_overrides(cfg: Config) -> None:
         val = os.environ.get(env_name)
         if val:
             getattr(cfg, section_name).enabled = _bool(val)
+
+    # Per-action tier overrides without YAML, e.g.
+    # REMEDIATION_OVERRIDES=unifi.poe_cycle=auto,docker.restart_container=approve
+    overrides = os.environ.get("REMEDIATION_OVERRIDES", "")
+    for pair in overrides.split(","):
+        if "=" not in pair:
+            continue
+        action, tier = (p.strip() for p in pair.split("=", 1))
+        if action and tier.lower() in ("auto", "approve", "off"):
+            cfg.remediation.overrides[action] = tier.lower()
 
 
 def load_config(path: str | Path | None) -> Config:

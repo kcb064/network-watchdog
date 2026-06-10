@@ -50,8 +50,14 @@ class AdguardCollector(Collector):
                                           meta={"name": "AdGuard Home"}))
             return out
         except Exception as exc:  # noqa: BLE001
+            meta = {"name": "AdGuard Home"}
+            if self.acfg.ha_addon and self.cfg.home_assistant.enabled:
+                meta["remediation"] = {
+                    "kind": "ha_addon_restart", "addon": self.acfg.ha_addon,
+                    "name": "AdGuard Home add-on",
+                }
             out.checks.append(CheckResult("adguard.api", FAIL, f"unreachable: {exc}",
-                                          meta={"name": "AdGuard Home"}))
+                                          meta=meta))
             return out
 
         latency_ms = (time.perf_counter() - t0) * 1000

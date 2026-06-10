@@ -4,7 +4,7 @@ from netwatch.collectors.base import slug
 from netwatch.collectors.docker_ import classify_container, container_name
 from netwatch.collectors.homeassistant import summarize_unavailable
 from netwatch.collectors.truenas import alert_severity, classify_pool
-from netwatch.collectors.unifi import map_subsystem
+from netwatch.collectors.unifi import extract_uplink, map_subsystem
 from netwatch.models import FAIL, OK, WARN
 
 
@@ -97,3 +97,11 @@ def test_ha_unavailable_summary():
 def test_slug():
     assert slug("Living Room AP") == "Living-Room-AP"
     assert slug("  ") == "unnamed"
+
+
+def test_extract_uplink():
+    dev = {"uplink": {"type": "wire", "uplink_mac": "aa:bb:cc",
+                      "uplink_remote_port": "8"}}
+    assert extract_uplink(dev) == {"switch_mac": "aa:bb:cc", "port_idx": 8}
+    assert extract_uplink({"uplink": {"type": "wireless"}}) is None  # mesh AP
+    assert extract_uplink({}) is None

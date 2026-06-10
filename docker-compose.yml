@@ -46,6 +46,14 @@ services:
       WATCHDOG_PASSWORD: ${WATCHDOG_PASSWORD:-}      # dashboard basic auth (user "admin")
       HEARTBEAT_URL: ${HEARTBEAT_URL:-}              # healthchecks.io dead man's switch
       REMEDIATION_MODE: ${REMEDIATION_MODE:-tiered}  # tiered | approve_all | off
+
+      # -- Connectivity self-healing (optional)
+      # AdGuard runs as an HA add-on? Its slug lets the watchdog restart it:
+      ADGUARD_HA_ADDON: ${ADGUARD_HA_ADDON:-}        # e.g. a0d7b954_adguard
+      # HA smart plug powering the modem — power-cycled when internet is hard-down:
+      WAN_POWER_CYCLE_ENTITY: ${WAN_POWER_CYCLE_ENTITY:-}  # e.g. switch.modem_plug
+      # Per-action tier overrides (action=auto|approve|off, comma-separated):
+      REMEDIATION_OVERRIDES: ${REMEDIATION_OVERRIDES:-}    # e.g. unifi.poe_cycle=auto
     volumes:
       # Docker socket: container monitoring + restart remediation. Use ":ro"
       # and REMEDIATION_MODE=off for a strictly read-only watchdog.

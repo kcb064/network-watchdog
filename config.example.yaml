@@ -73,6 +73,9 @@ adguard:
   # 0 = re-enable right away, -1 = never auto re-enable.
   auto_reenable_after_minutes: 30
   avg_processing_warn_ms: 300
+  # AdGuard running as a Home Assistant add-on? Set its slug (from the add-on
+  # page URL) and the watchdog can restart it when it stops answering:
+  ha_addon: ""
 
 truenas:
   enabled: false
@@ -94,6 +97,10 @@ wan:
   http_targets: ["https://www.gstatic.com/generate_204"]
   loss_warn_pct: 10
   loss_fail_pct: 60
+  # HA smart plug powering the modem/ONT — power-cycled when internet is
+  # hard-down (tier "wan.power_cycle", approval by default):
+  power_cycle_entity: ""
+  power_cycle_off_seconds: 15
 
 docker:
   enabled: true

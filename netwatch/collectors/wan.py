@@ -122,17 +122,22 @@ class WanCollector(Collector):
 
         best_loss = min(losses) if losses else 100.0
         msg = "; ".join(details)
+        meta: dict = {"name": "Internet (ping)"}
         if best_loss >= self.wcfg.loss_fail_pct:
             status, sev = FAIL, "critical"
             msg = f"Internet unreachable — {msg}"
+            if self.wcfg.power_cycle_entity and self.cfg.home_assistant.enabled:
+                meta["remediation"] = {
+                    "kind": "wan_power_cycle",
+                    "entity": self.wcfg.power_cycle_entity,
+                    "name": "modem/router power",
+                }
         elif any(l >= self.wcfg.loss_warn_pct for l in losses):
             status, sev = WARN, "warn"
             msg = f"Packet loss — {msg}"
         else:
             status, sev = OK, "critical"
-        out.checks.append(
-            CheckResult("wan.ping", status, msg, severity=sev, meta={"name": "Internet (ping)"})
-        )
+        out.checks.append(CheckResult("wan.ping", status, msg, severity=sev, meta=meta))
 
     async def _collect_dns(self, out: CollectorOutput) -> None:
         servers = self._dns_servers()

@@ -74,6 +74,26 @@ def test_explicit_enabled_flag_wins(tmp_path, monkeypatch):
     assert cfg.wan.enabled is False
 
 
+def test_remediation_overrides_env(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "REMEDIATION_OVERRIDES",
+        "unifi.poe_cycle=auto, wan.power_cycle=AUTO, bogus, x=nope",
+    )
+    cfg = load_config(tmp_path / "absent.yaml")
+    assert cfg.remediation.overrides == {
+        "unifi.poe_cycle": "auto", "wan.power_cycle": "auto",
+    }
+
+
+def test_self_heal_env_vars(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADGUARD_HA_ADDON", "a0d7b954_adguard")
+    monkeypatch.setenv("WAN_POWER_CYCLE_ENTITY", "switch.modem_plug")
+    cfg = load_config(tmp_path / "absent.yaml")
+    assert cfg.adguard.ha_addon == "a0d7b954_adguard"
+    assert cfg.adguard.enabled is True  # any adguard var enables the collector
+    assert cfg.wan.power_cycle_entity == "switch.modem_plug"
+
+
 def test_env_overrides_beat_yaml(tmp_path, monkeypatch):
     p = tmp_path / "config.yaml"
     p.write_text(

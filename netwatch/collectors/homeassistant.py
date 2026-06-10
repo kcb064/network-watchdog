@@ -40,6 +40,18 @@ class HomeAssistantCollector(Collector):
     async def aclose(self) -> None:
         await self._http.aclose()
 
+    # -- remediation executor backends -----------------------------------------
+
+    async def call_service(self, domain: str, service: str, data: dict) -> None:
+        r = await self._http.post(f"/api/services/{domain}/{service}", json=data)
+        r.raise_for_status()
+
+    async def restart_addon(self, slug: str) -> str:
+        # Supervisor API proxied through HA core; needs an admin user's token.
+        r = await self._http.post(f"/api/hassio/addons/{slug}/restart", timeout=90)
+        r.raise_for_status()
+        return f"add-on {slug} restart requested"
+
     def _down_meta(self) -> dict:
         meta = {"name": "Home Assistant"}
         if self.hcfg.container_name:

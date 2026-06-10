@@ -34,6 +34,14 @@ def map_subsystem(status: str) -> tuple[str, str]:
     return OK, "critical"  # 'unknown' = subsystem unused; don't alert
 
 
+def extract_uplink(dev: dict) -> dict | None:
+    """Wired uplink (upstream switch mac + port) of a device, if reported."""
+    up = dev.get("uplink") or {}
+    if up.get("type") == "wire" and up.get("uplink_mac") and up.get("uplink_remote_port"):
+        return {"switch_mac": up["uplink_mac"], "port_idx": int(up["uplink_remote_port"])}
+    return None
+
+
 class UnifiClient:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -176,7 +184,16 @@ class UnifiCollector(Collector):
             if dev.get("upgradable"):
                 upgradable += 1
 
+            mac = dev.get("mac", "")
+            is_ap = dev.get("type") == "uap"
+
             if state == 1:
+                # Remember an AP's uplink while it's online — when it later goes
+                # offline we can power-cycle that PoE port to revive it.
+                if is_ap and mac:
+                    uplink = extract_uplink(dev)
+                    if uplink:
+                        self.db.kv_set_json(f"unifi.uplink.{mac}", uplink)
                 out.samples.append(Sample("unifi.device.cpu_pct", cpu, {"name": name}))
                 out.samples.append(Sample("unifi.device.mem_pct", mem, {"name": name}))
                 if mem >= 95 or cpu >= 98:
@@ -195,10 +212,17 @@ class UnifiCollector(Collector):
                         severity="warn", meta={"name": f"UniFi {name}"},
                     ))
             elif state == 0:
+                meta = {"name": f"UniFi {name}"}
+                uplink = self.db.kv_get_json(f"unifi.uplink.{mac}") if (is_ap and mac) else None
+                if uplink:
+                    meta["remediation"] = {
+                        "kind": "poe_cycle", "name": name, "mac": mac,
+                        "switch_mac": uplink["switch_mac"], "port_idx": uplink["port_idx"],
+                    }
                 out.checks.append(CheckResult(
                     key, FAIL, "offline (power/PoE, cable, or device hang)",
                     severity=self.ucfg.device_offline_severity,
-                    meta={"name": f"UniFi {name}"},
+                    meta=meta,
                 ))
             else:
                 out.checks.append(CheckResult(
@@ -212,3 +236,10 @@ class UnifiCollector(Collector):
     async def restart_device(self, mac: str) -> str:
         await self.client.post("cmd/devmgr", {"cmd": "restart", "mac": mac.lower()})
         return "restart command sent"
+
+    async def power_cycle_port(self, switch_mac: str, port_idx: int) -> str:
+        await self.client.post(
+            "cmd/devmgr",
+            {"cmd": "power-cycle", "mac": switch_mac.lower(), "port_idx": int(port_idx)},
+        )
+        return f"PoE power-cycled port {port_idx} on {switch_mac}"

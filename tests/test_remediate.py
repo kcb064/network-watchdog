@@ -156,6 +156,99 @@ def test_off_mode_returns_suggestion(env):
     assert "Restart container" in plan[1]
 
 
+class FakeUnifi:
+    def __init__(self):
+        self.cycled = []
+
+    async def power_cycle_port(self, switch_mac, port_idx):
+        self.cycled.append((switch_mac, port_idx))
+        return "cycled"
+
+
+class FakeHA:
+    def __init__(self):
+        self.addons = []
+        self.calls = []
+
+    async def restart_addon(self, slug):
+        self.addons.append(slug)
+        return f"add-on {slug} restart requested"
+
+    async def call_service(self, domain, service, data):
+        self.calls.append((domain, service, data.get("entity_id")))
+
+
+def offline_ap_check():
+    return CheckResult(
+        "unifi.device.Office-AP", FAIL, "offline", severity="warn",
+        meta={"name": "UniFi Office AP",
+              "remediation": {"kind": "poe_cycle", "name": "Office AP", "mac": "aa:bb",
+                              "switch_mac": "cc:dd:ee", "port_idx": 7}},
+    )
+
+
+def test_poe_cycle_defaults_to_approval_then_executes(env):
+    db, cfg, docker, rem, incident = env
+    unifi = FakeUnifi()
+    rem.collectors["unifi"] = unifi
+    plan = asyncio.run(rem.consider(incident, offline_ap_check()))
+    assert plan[0] == "approve"
+    ok, detail = asyncio.run(rem.approve(plan[1]["id"], plan[1]["token"]))
+    assert ok
+    assert unifi.cycled == [("cc:dd:ee", 7)]
+
+
+def test_poe_cycle_auto_via_override(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["unifi"] = FakeUnifi()
+    cfg.remediation.overrides = {"unifi.poe_cycle": "auto"}
+    plan = asyncio.run(rem.consider(incident, offline_ap_check()))
+    assert plan[0] == "auto"
+
+
+def test_ha_addon_restart_is_auto(env):
+    db, cfg, docker, rem, incident = env
+    ha = FakeHA()
+    rem.collectors["ha"] = ha
+    check = CheckResult(
+        "adguard.api", FAIL, "unreachable",
+        meta={"remediation": {"kind": "ha_addon_restart", "addon": "a0d7b954_adguard",
+                              "name": "AdGuard Home add-on"}},
+    )
+    plan = asyncio.run(rem.consider(incident, check))
+    assert plan[0] == "auto"
+    ok, _ = asyncio.run(rem.execute(plan[1]))
+    assert ok and ha.addons == ["a0d7b954_adguard"]
+
+
+def test_wan_power_cycle_off_then_on(env):
+    db, cfg, docker, rem, incident = env
+    ha = FakeHA()
+    rem.collectors["ha"] = ha
+    cfg.wan.power_cycle_off_seconds = 0
+    cfg.remediation.overrides = {"wan.power_cycle": "auto"}
+    check = CheckResult(
+        "wan.ping", FAIL, "Internet unreachable",
+        meta={"remediation": {"kind": "wan_power_cycle", "entity": "switch.modem_plug",
+                              "name": "modem/router power"}},
+    )
+    plan = asyncio.run(rem.consider(incident, check))
+    assert plan[0] == "auto"
+    ok, detail = asyncio.run(rem.execute(plan[1]))
+    assert ok
+    assert ha.calls == [("switch", "turn_off", "switch.modem_plug"),
+                        ("switch", "turn_on", "switch.modem_plug")]
+
+
+def test_wan_power_cycle_needs_ha_collector(env):
+    db, cfg, docker, rem, incident = env  # no "ha" collector registered
+    check = CheckResult(
+        "wan.ping", FAIL, "Internet unreachable",
+        meta={"remediation": {"kind": "wan_power_cycle", "entity": "switch.modem_plug"}},
+    )
+    assert asyncio.run(rem.consider(incident, check)) is None
+
+
 def test_adguard_grace_gating(env):
     db, cfg, docker, rem, incident = env
 

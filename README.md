@@ -66,6 +66,9 @@ Per-service checks:
 | `WATCHDOG_PASSWORD` | Dashboard basic auth (user `admin`) |
 | `HEARTBEAT_URL` | Dead man's switch (healthchecks.io) |
 | `REMEDIATION_MODE` | `tiered` (default) / `approve_all` / `off` |
+| `ADGUARD_HA_ADDON` | AdGuard runs as an HA add-on → auto-restart it when it dies (slug, e.g. `a0d7b954_adguard`) |
+| `WAN_POWER_CYCLE_ENTITY` | HA smart plug on the modem → power-cycle when internet is hard-down |
+| `REMEDIATION_OVERRIDES` | Per-action tiers, e.g. `unifi.poe_cycle=auto,wan.power_cycle=auto` |
 | `WAN_ENABLED`, `DOCKER_ENABLED`, `UNIFI_ENABLED`, `HA_ENABLED`, `ADGUARD_ENABLED`, `TRUENAS_ENABLED` | Explicit on/off overrides |
 
 Fine-grained tuning (thresholds, poll intervals, per-action remediation
@@ -115,8 +118,21 @@ mode: tiered            # in config.yaml
 |---|---|---|
 | `docker.restart_container` | **auto** | crashed or unhealthy containers; max once per 30 min per container, never for restart-loops |
 | `adguard.enable_protection` | **auto** | only after the grace period (default 30 min) |
+| `adguard.restart_ha_addon` | **auto** | AdGuard-as-HA-add-on stopped answering (needs `ADGUARD_HA_ADDON`) |
 | `ha.restart_container` | approve | needs `home_assistant.container_name` set |
 | `unifi.restart_device` | approve | offered when a device is hung (CPU/RAM maxed) |
+| `unifi.poe_cycle` | approve | AP went offline → power-cycle its PoE port on the upstream switch (uplink learned while the AP was online) |
+| `wan.power_cycle` | approve | internet hard-down → power-cycle the modem via an HA smart plug (needs `WAN_POWER_CYCLE_ENTITY`); always turns power back on, with retries |
+
+Want connectivity problems to fix themselves without waiting for your tap?
+Flip the risky-but-effective ones to auto:
+
+```
+REMEDIATION_OVERRIDES=unifi.restart_device=auto,unifi.poe_cycle=auto,wan.power_cycle=auto
+```
+
+All auto actions respect the 30-min per-target cooldown, so a fix that isn't
+working escalates to you instead of looping.
 
 - Switch to `approve_all` (everything asks) or `off` (suggest-only) globally,
   or override per action in `remediation.overrides`.
