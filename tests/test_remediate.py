@@ -240,6 +240,27 @@ def test_wan_power_cycle_off_then_on(env):
                         ("switch", "turn_on", "switch.modem_plug")]
 
 
+def test_auto_only_allows_auto_tier(env):
+    db, cfg, docker, rem, incident = env
+    plan = asyncio.run(rem.consider(incident, crash_check(), auto_only=True))
+    assert plan is not None and plan[0] == "auto"
+
+
+def test_auto_only_skips_approval_tier_without_creating_action(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["unifi"] = FakeUnifi()
+    plan = asyncio.run(rem.consider(incident, offline_ap_check(), auto_only=True))
+    assert plan is None
+    assert db.query("SELECT * FROM actions") == []  # no silent pending row
+
+
+def test_auto_only_respects_cooldown(env):
+    db, cfg, docker, rem, incident = env
+    db.kv_set("act_cd:docker.restart_container:plex", str(time.time()))
+    plan = asyncio.run(rem.consider(incident, crash_check(), auto_only=True))
+    assert plan is None
+
+
 def test_wan_power_cycle_needs_ha_collector(env):
     db, cfg, docker, rem, incident = env  # no "ha" collector registered
     check = CheckResult(

@@ -18,7 +18,7 @@ monitored over the APIs you already have.
 |---|---|
 | Detect outages | Polls every service (default 30 s) with hysteresis: 3 consecutive failures open an incident, 2 successes close it — no alerts from a single dropped packet |
 | Root-cause grouping | If the WAN is down, DNS/HTTP failures are attributed to it instead of spamming you with 5 alerts |
-| Flap suppression | A service bouncing up/down gets one "flapping" alert, then silence until it stabilizes |
+| Flap suppression | A service bouncing up/down gets one "flapping" alert, then up/down alerts are muted until it stabilizes — automatic fixes keep running and are always announced |
 | Predict disk full | Linear trend on pool usage → "Pool tank full in ~12 days" before it happens |
 | Predict memory leaks | Containers with steadily climbing RAM are flagged with their exhaustion ETA |
 | Predict ISP degradation | Recent ping latency vs. 7-day baseline (z-score) |

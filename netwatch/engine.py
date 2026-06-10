@@ -195,8 +195,9 @@ class Engine:
                 self.notifier.raw(
                     title=f"{name} is flapping",
                     message=(f"{name} changed state {len(row['transitions'])} times in the last "
-                             f"{self.cfg.state.flap_window_minutes} min. Notifications for it are "
-                             f"muted until it stays stable for {self.cfg.state.flap_calm_minutes} min."),
+                             f"{self.cfg.state.flap_window_minutes} min. Up/down alerts for it are "
+                             f"muted until it stays stable for {self.cfg.state.flap_calm_minutes} min. "
+                             "Automatic fixes still run and will be announced."),
                     priority=4, tags=["repeat"],
                 )
             elif kind == "flap_end":
@@ -237,10 +238,20 @@ class Engine:
                 inc = self.db.query_one(
                     "SELECT * FROM incidents WHERE id=?", (row["incident_id"],)
                 )
-                if inc and not inc["root_cause"] and not row["flapping"]:
-                    plan = await self.remediator.consider(inc, result)
+                if inc and not inc["root_cause"]:
+                    plan = await self.remediator.consider(
+                        inc, result, auto_only=bool(row["flapping"])
+                    )
                     if plan and plan[0] == "auto":
                         await self.remediator.execute(plan[1])
+                    elif plan and plan[0] == "approve":
+                        # A fix became available after the incident opened —
+                        # the approval buttons must actually reach the user.
+                        self.notifier.incident_opened(inc, result, approval=plan[1])
+                        self.db.execute(
+                            "UPDATE incidents SET last_notified=? WHERE id=?",
+                            (time.time(), inc["id"]),
+                        )
 
         self._save_row(row)
 
@@ -255,9 +266,16 @@ class Engine:
         )
         row["incident_id"] = inc_id
 
-        if not notify:
-            return
+        if root is not None:
+            return  # quiet: the root-cause incident drives fixing/notifying
         inc = self.db.query_one("SELECT * FROM incidents WHERE id=?", (inc_id,))
+        if not notify:
+            # Flap-muted: state-change alerts stay quiet, but automatic fixes
+            # still run (execute() announces "Fix applied/FAILED" on its own).
+            plan = await self.remediator.consider(inc, result, auto_only=True)
+            if plan and plan[0] == "auto":
+                await self.remediator.execute(plan[1])
+            return
         plan = await self.remediator.consider(inc, result)
         if plan is None:
             self.notifier.incident_opened(inc, result)

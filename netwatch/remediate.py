@@ -222,8 +222,12 @@ class Remediator:
 
     # -- planning -----------------------------------------------------------------
 
-    async def consider(self, incident: dict, check: CheckResult):
-        """Returns None | ("auto", row) | ("approve", row) | ("off", label)."""
+    async def consider(self, incident: dict, check: CheckResult, auto_only: bool = False):
+        """Returns None | ("auto", row) | ("approve", row) | ("off", label).
+
+        auto_only: used while a check is flapping — only fully-automatic fixes
+        may proceed (no silent pending approvals, no notification spam).
+        """
         now = time.time()
         for spec in SPECS:
             ctx = spec.matcher(check, self)
@@ -237,6 +241,8 @@ class Remediator:
             if tier == "auto" and self._cooldown_active(spec.id, target, now):
                 log.info("%s on %s on cooldown — requiring approval", spec.id, target)
                 tier = "approve"
+            if auto_only and tier != "auto":
+                return None
 
             row = self._create_action(spec, ctx, target, tier, incident["id"], now)
             return (tier, row)
