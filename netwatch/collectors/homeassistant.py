@@ -47,8 +47,20 @@ class HomeAssistantCollector(Collector):
         r.raise_for_status()
 
     async def restart_addon(self, slug: str) -> str:
-        # Supervisor API proxied through HA core; needs an admin user's token.
-        r = await self._http.post(f"/api/hassio/addons/{slug}/restart", timeout=90)
+        # Prefer the hassio.addon_restart service — the same mechanism HA
+        # automations use, and friendlier to tokens than the raw /api/hassio
+        # Supervisor proxy (which newer HA versions restrict).
+        r = await self._http.post(
+            "/api/services/hassio/addon_restart", json={"addon": slug}, timeout=90
+        )
+        if r.status_code in (400, 404, 405):  # hassio services unavailable: old proxy
+            r = await self._http.post(f"/api/hassio/addons/{slug}/restart", timeout=90)
+        if r.status_code in (401, 403):
+            raise RuntimeError(
+                f"Home Assistant rejected the add-on restart (HTTP {r.status_code}). "
+                "The HA_TOKEN user must be an Administrator — check HA → Settings → "
+                "People → Users → (token's user) → 'Administrator' toggle."
+            )
         r.raise_for_status()
         return f"add-on {slug} restart requested"
 
