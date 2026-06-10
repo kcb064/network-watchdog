@@ -29,7 +29,12 @@ needs the Linux socket, fails gracefully here).
   buttons POST to `/api/actions/{id}/approve`. `lifeline=True` specs
   (DNS/WAN/UniFi fixes) auto-retry with doubling backoff instead of
   downgrading to approval on cooldown — approvals are undeliverable when the
-  notification path itself is what broke.
+  notification path itself is what broke. Checks may carry
+  `meta.remediation_fallbacks` (list): consider() walks the ladder, advancing
+  when a rung's attempt budget is spent. Specs with a `reverter` are
+  mitigations (e.g. unifi.dns_failover): no fix-verification, undone by the
+  sweeper via revert_orphans() when their incident closes. Matchers take
+  (ctx, rem), not the whole check.
 - `netwatch/predict.py` — pure math (`linear_fit`, `fill_eta_days`,
   `latency_anomaly`) + `_manage()` which owns prediction-kind incidents.
 - `netwatch/notify.py` — ntfy JSON publish via persistent SQLite queue with

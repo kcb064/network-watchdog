@@ -76,6 +76,10 @@ adguard:
   # AdGuard running as a Home Assistant add-on? Set its slug (from the add-on
   # page URL) and the watchdog can restart it when it stops answering:
   ha_addon: ""
+  # DNS failover of last resort (needs UniFi enabled): when AdGuard stays
+  # dead after restart attempts are exhausted, UniFi networks whose DHCP DNS
+  # points at AdGuard switch to this resolver, and back on recovery:
+  failover_dns: ""
 
 truenas:
   enabled: false

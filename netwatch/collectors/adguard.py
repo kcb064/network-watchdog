@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from urllib.parse import urlparse
 
 import httpx
 
@@ -35,6 +36,25 @@ class AdguardCollector(Collector):
     async def aclose(self) -> None:
         await self._http.aclose()
 
+    def _down_meta(self) -> dict:
+        """Remediation ladder for AdGuard-unreachable: restart the HA add-on
+        first; if that's exhausted (or unavailable), fail the LAN's DHCP DNS
+        over to a public resolver until AdGuard recovers."""
+        meta: dict = {"name": "AdGuard Home"}
+        if self.acfg.ha_addon and self.cfg.home_assistant.enabled:
+            meta["remediation"] = {
+                "kind": "ha_addon_restart", "addon": self.acfg.ha_addon,
+                "name": "AdGuard Home add-on",
+            }
+        if self.acfg.failover_dns and self.cfg.unifi.enabled:
+            host = urlparse(self.acfg.url).hostname or ""
+            if host:
+                meta["remediation_fallbacks"] = [{
+                    "kind": "dns_failover", "adguard_ip": host,
+                    "failover_dns": self.acfg.failover_dns, "name": "LAN DNS",
+                }]
+        return meta
+
     async def collect(self) -> CollectorOutput:
         out = CollectorOutput()
         now = time.time()
@@ -50,14 +70,8 @@ class AdguardCollector(Collector):
                                           meta={"name": "AdGuard Home"}))
             return out
         except Exception as exc:  # noqa: BLE001
-            meta = {"name": "AdGuard Home"}
-            if self.acfg.ha_addon and self.cfg.home_assistant.enabled:
-                meta["remediation"] = {
-                    "kind": "ha_addon_restart", "addon": self.acfg.ha_addon,
-                    "name": "AdGuard Home add-on",
-                }
             out.checks.append(CheckResult("adguard.api", FAIL, f"unreachable: {exc}",
-                                          meta=meta))
+                                          meta=self._down_meta()))
             return out
 
         latency_ms = (time.perf_counter() - t0) * 1000

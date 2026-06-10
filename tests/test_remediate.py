@@ -13,9 +13,17 @@ from netwatch.remediate import Remediator
 class FakeNotifier:
     def __init__(self):
         self.results = []
+        self.raws = []
+        self.events = []
 
     def action_result(self, act, ok, detail):
         self.results.append((act["action"], ok, detail))
+
+    def raw(self, title, message, priority=3, tags=None, actions=None):
+        self.raws.append(title)
+
+    def event(self, key, title, message, severity="info", dedup_minutes=1440):
+        self.events.append(title)
 
 
 class FakeDocker:
@@ -159,10 +167,20 @@ def test_off_mode_returns_suggestion(env):
 class FakeUnifi:
     def __init__(self):
         self.cycled = []
+        self.failovers = []
+        self.failbacks = 0
 
     async def power_cycle_port(self, switch_mac, port_idx):
         self.cycled.append((switch_mac, port_idx))
         return "cycled"
+
+    async def dns_failover(self, dns_ip, failover_dns):
+        self.failovers.append((dns_ip, failover_dns))
+        return "failed over"
+
+    async def dns_failback(self):
+        self.failbacks += 1
+        return "restored"
 
 
 class FakeHA:
@@ -311,6 +329,98 @@ def test_lifeline_exhausted_falls_back_to_approval(env):
                    [now - 3 * 3600, now - 2 * 3600, now - 3600])
     plan = asyncio.run(rem.consider(incident, addon_down_check()))
     assert plan is not None and plan[0] == "approve"
+
+
+def chained_adguard_check():
+    return CheckResult(
+        "adguard.api", FAIL, "unreachable",
+        meta={
+            "name": "AdGuard Home",
+            "remediation": {"kind": "ha_addon_restart", "addon": "a0d7b954_adguard",
+                            "name": "AdGuard Home add-on"},
+            "remediation_fallbacks": [
+                {"kind": "dns_failover", "adguard_ip": "192.168.1.28",
+                 "failover_dns": "1.1.1.1", "name": "LAN DNS"},
+            ],
+        },
+    )
+
+
+def seed_restart_attempts(db, when: list[float]):
+    db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on", when)
+
+
+def test_chain_advances_to_dns_failover_when_restarts_exhausted(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["ha"] = FakeHA()
+    unifi = FakeUnifi()
+    rem.collectors["unifi"] = unifi
+    now = time.time()
+    seed_restart_attempts(db, [now - 3 * 3600, now - 2 * 3600, now - 3600])
+    plan = asyncio.run(rem.consider(incident, chained_adguard_check()))
+    assert plan is not None and plan[0] == "auto"
+    assert plan[1]["action"] == "unifi.dns_failover"
+    ok, _ = asyncio.run(rem.execute(plan[1]))
+    assert ok and unifi.failovers == [("192.168.1.28", "1.1.1.1")]
+    row = db.query_one("SELECT * FROM actions WHERE id=?", (plan[1]["id"],))
+    assert row["verify_deadline"] is None  # mitigation: no "didn't help" alarm
+
+
+def test_chain_does_not_advance_before_exhaustion(env):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["ha"] = FakeHA()
+    rem.collectors["unifi"] = FakeUnifi()
+    seed_restart_attempts(db, [time.time() - 60])  # one recent attempt: backing off
+    assert asyncio.run(rem.consider(incident, chained_adguard_check())) is None
+
+
+def test_restarts_resume_while_failover_active(env):
+    db, cfg, docker, rem, incident = env
+    ha = FakeHA()
+    rem.collectors["ha"] = ha
+    rem.collectors["unifi"] = FakeUnifi()
+    now = time.time()
+    # failover already active for this incident
+    db.execute(
+        "INSERT INTO actions (created, action, target, tier, status, incident_id, ctx)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (now - 3600, "unifi.dns_failover", "LAN DNS", "auto", "succeeded",
+         incident["id"], "{}"),
+    )
+    # restart attempts exhausted and still recent -> nothing fires
+    seed_restart_attempts(db, [now - 3 * 3600, now - 2 * 3600, now - 3600])
+    assert asyncio.run(rem.consider(incident, chained_adguard_check())) is None
+    # attempts age out -> restart retries resume (failover rung stays blocked)
+    seed_restart_attempts(db, [now - 9 * 3600, now - 8 * 3600, now - 7 * 3600])
+    plan = asyncio.run(rem.consider(incident, chained_adguard_check()))
+    assert plan is not None and plan[0] == "auto"
+    assert plan[1]["action"] == "adguard.restart_ha_addon"
+
+
+def test_revert_orphans_restores_dns(env):
+    db, cfg, docker, rem, incident = env
+    unifi = FakeUnifi()
+    rem.collectors["unifi"] = unifi
+    now = time.time()
+    cur = db.execute(
+        "INSERT INTO incidents (key, severity, title, opened, closed)"
+        " VALUES (?,?,?,?,?)",
+        ("adguard.api", "critical", "AdGuard Home DOWN", now - 7200, now - 60),
+    )
+    db.execute(
+        "INSERT INTO actions (created, action, target, label, tier, status, incident_id, ctx)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (now - 7000, "unifi.dns_failover", "LAN DNS", "Fail over LAN DNS to 1.1.1.1",
+         "auto", "succeeded", cur.lastrowid, "{}"),
+    )
+    asyncio.run(rem.revert_orphans())
+    assert unifi.failbacks == 1
+    row = db.query_one("SELECT reverted FROM actions WHERE action='unifi.dns_failover'")
+    assert row["reverted"] is not None
+    assert any("Reverted" in t for t in rem.notifier.raws)
+    # second sweep is a no-op
+    asyncio.run(rem.revert_orphans())
+    assert unifi.failbacks == 1
 
 
 def test_lifeline_old_attempts_age_out(env):

@@ -109,3 +109,11 @@ def test_env_overrides_beat_yaml(tmp_path, monkeypatch):
     assert cfg.unifi.url == "https://192.168.9.1"
     assert cfg.remediation.mode == "off"
     assert cfg.server.public_url == "http://nas:8787"
+
+
+def test_failover_dns_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADGUARD_FAILOVER_DNS", "1.1.1.1")
+    from netwatch.config import load_config
+    cfg = load_config(tmp_path / "absent.yaml")
+    assert cfg.adguard.failover_dns == "1.1.1.1"
+    assert cfg.adguard.enabled is True

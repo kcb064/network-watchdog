@@ -67,6 +67,7 @@ Per-service checks:
 | `HEARTBEAT_URL` | Dead man's switch (healthchecks.io) |
 | `REMEDIATION_MODE` | `tiered` (default) / `approve_all` / `off` |
 | `ADGUARD_HA_ADDON` | AdGuard runs as an HA add-on → auto-restart it when it dies (slug, e.g. `a0d7b954_adguard`) |
+| `ADGUARD_FAILOVER_DNS` | AdGuard stays dead → switch UniFi DHCP DNS to this resolver, revert on recovery (e.g. `1.1.1.1`) |
 | `WAN_POWER_CYCLE_ENTITY` | HA smart plug on the modem → power-cycle when internet is hard-down |
 | `REMEDIATION_OVERRIDES` | Per-action tiers, e.g. `unifi.poe_cycle=auto,wan.power_cycle=auto` |
 | `WAN_ENABLED`, `DOCKER_ENABLED`, `UNIFI_ENABLED`, `HA_ENABLED`, `ADGUARD_ENABLED`, `TRUENAS_ENABLED` | Explicit on/off overrides |
@@ -123,6 +124,12 @@ mode: tiered            # in config.yaml
 | `unifi.restart_device` | approve | offered when a device is hung (CPU/RAM maxed) |
 | `unifi.poe_cycle` | approve | AP went offline → power-cycle its PoE port on the upstream switch (uplink learned while the AP was online) |
 | `wan.power_cycle` | approve | internet hard-down → power-cycle the modem via an HA smart plug (needs `WAN_POWER_CYCLE_ENTITY`); always turns power back on, with retries |
+| `unifi.dns_failover` | **auto** | fallback rung behind the AdGuard restarts: switches UniFi DHCP DNS to `ADGUARD_FAILOVER_DNS`, **auto-reverts when AdGuard recovers**. Clients pick up the change as DHCP leases renew |
+
+Fixes can form **fallback chains**: when a rung's attempt budget is spent, the
+next rung takes over while the earlier one keeps retrying on its backoff
+schedule. The AdGuard ladder is *restart add-on → DNS failover*, so a dead
+AdGuard costs you ad-blocking, not internet.
 
 Want connectivity problems to fix themselves without waiting for your tap?
 Flip the risky-but-effective ones to auto:

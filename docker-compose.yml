@@ -50,6 +50,9 @@ services:
       # -- Connectivity self-healing (optional)
       # AdGuard runs as an HA add-on? Its slug lets the watchdog restart it:
       ADGUARD_HA_ADDON: ${ADGUARD_HA_ADDON:-}        # e.g. a0d7b954_adguard
+      # If AdGuard stays dead after the restart attempts, switch UniFi DHCP
+      # DNS to this resolver — and back again once AdGuard recovers:
+      ADGUARD_FAILOVER_DNS: ${ADGUARD_FAILOVER_DNS:-}  # e.g. 1.1.1.1
       # HA smart plug powering the modem — power-cycled when internet is hard-down:
       WAN_POWER_CYCLE_ENTITY: ${WAN_POWER_CYCLE_ENTITY:-}  # e.g. switch.modem_plug
       # Per-action tier overrides (action=auto|approve|off, comma-separated):

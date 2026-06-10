@@ -75,6 +75,11 @@ class AdguardConfig(_Base):
     # If AdGuard runs as a Home Assistant add-on, its slug (e.g.
     # "a0d7b954_adguard") lets the watchdog restart it via HA when it dies.
     ha_addon: str = ""
+    # Last-resort DNS failover: when AdGuard stays dead after the restart
+    # attempts are exhausted, UniFi networks whose DHCP DNS points at AdGuard
+    # are switched to this resolver — and switched back once AdGuard recovers.
+    # Empty = feature off. Requires UniFi monitoring.
+    failover_dns: str = ""
 
 
 class TruenasConfig(_Base):
@@ -191,7 +196,8 @@ _SERVICE_ENV = {
     "home_assistant": {"HA_URL": "url", "HA_TOKEN": "token",
                        "HA_CONTAINER": "container_name"},
     "adguard": {"ADGUARD_URL": "url", "ADGUARD_USERNAME": "username",
-                "ADGUARD_PASSWORD": "password", "ADGUARD_HA_ADDON": "ha_addon"},
+                "ADGUARD_PASSWORD": "password", "ADGUARD_HA_ADDON": "ha_addon",
+                "ADGUARD_FAILOVER_DNS": "failover_dns"},
     "truenas": {"TRUENAS_URL": "url", "TRUENAS_API_KEY": "api_key"},
 }
 _ENABLED_ENV = {

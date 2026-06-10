@@ -27,19 +27,21 @@ class ActionSpec:
     id: str
     default_tier: str  # auto | approve
     label: Callable[[dict], str]
-    matcher: Callable[[CheckResult, "Remediator"], dict | None]
+    matcher: Callable[[dict, "Remediator"], dict | None]  # (ctx, rem) -> ctx
     executor: Callable  # async (remediator, ctx) -> str
     # Lifeline fixes restore the connectivity that notifications themselves
     # depend on (DNS, WAN, network gear). When repeated, they back off and
     # retry automatically instead of degrading to an approval request that
     # may be undeliverable mid-outage.
     lifeline: bool = False
+    # Mitigations (e.g. DNS failover) are undone when their incident closes.
+    # They don't claim to resolve the incident, so they skip fix-verification.
+    reverter: Callable | None = None  # async (remediator, ctx) -> str
 
 
-# -- matchers -------------------------------------------------------------------
+# -- matchers (receive one remediation ctx dict from the check's ladder) ---------
 
-def _match_restart_container(check: CheckResult, rem: "Remediator") -> dict | None:
-    ctx = (check.meta.get("remediation") or {})
+def _match_restart_container(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "restart_container" or "docker" not in rem.collectors:
         return None
     name = ctx.get("name", "")
@@ -48,8 +50,7 @@ def _match_restart_container(check: CheckResult, rem: "Remediator") -> dict | No
     return dict(ctx)
 
 
-def _match_enable_protection(check: CheckResult, rem: "Remediator") -> dict | None:
-    ctx = (check.meta.get("remediation") or {})
+def _match_enable_protection(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "enable_protection" or "adguard" not in rem.collectors:
         return None
     if not ctx.get("eligible"):
@@ -57,8 +58,7 @@ def _match_enable_protection(check: CheckResult, rem: "Remediator") -> dict | No
     return dict(ctx)
 
 
-def _match_ha_restart(check: CheckResult, rem: "Remediator") -> dict | None:
-    ctx = (check.meta.get("remediation") or {})
+def _match_ha_restart(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "ha_restart" or "docker" not in rem.collectors:
         return None
     if not ctx.get("name"):
@@ -66,8 +66,7 @@ def _match_ha_restart(check: CheckResult, rem: "Remediator") -> dict | None:
     return dict(ctx)
 
 
-def _match_restart_device(check: CheckResult, rem: "Remediator") -> dict | None:
-    ctx = (check.meta.get("remediation") or {})
+def _match_restart_device(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "restart_device" or "unifi" not in rem.collectors:
         return None
     if not ctx.get("mac"):
@@ -75,8 +74,7 @@ def _match_restart_device(check: CheckResult, rem: "Remediator") -> dict | None:
     return dict(ctx)
 
 
-def _match_poe_cycle(check: CheckResult, rem: "Remediator") -> dict | None:
-    ctx = (check.meta.get("remediation") or {})
+def _match_poe_cycle(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "poe_cycle" or "unifi" not in rem.collectors:
         return None
     if not ctx.get("switch_mac") or not ctx.get("port_idx"):
@@ -84,8 +82,7 @@ def _match_poe_cycle(check: CheckResult, rem: "Remediator") -> dict | None:
     return dict(ctx)
 
 
-def _match_ha_addon_restart(check: CheckResult, rem: "Remediator") -> dict | None:
-    ctx = (check.meta.get("remediation") or {})
+def _match_ha_addon_restart(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "ha_addon_restart" or "ha" not in rem.collectors:
         return None
     if not ctx.get("addon"):
@@ -93,11 +90,18 @@ def _match_ha_addon_restart(check: CheckResult, rem: "Remediator") -> dict | Non
     return dict(ctx)
 
 
-def _match_wan_power_cycle(check: CheckResult, rem: "Remediator") -> dict | None:
-    ctx = (check.meta.get("remediation") or {})
+def _match_wan_power_cycle(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "wan_power_cycle" or "ha" not in rem.collectors:
         return None
     if not ctx.get("entity"):
+        return None
+    return dict(ctx)
+
+
+def _match_dns_failover(ctx: dict, rem: "Remediator") -> dict | None:
+    if ctx.get("kind") != "dns_failover" or "unifi" not in rem.collectors:
+        return None
+    if not ctx.get("adguard_ip") or not ctx.get("failover_dns"):
         return None
     return dict(ctx)
 
@@ -134,6 +138,16 @@ async def _exec_poe_cycle(rem: "Remediator", ctx: dict) -> str:
 
 async def _exec_ha_addon_restart(rem: "Remediator", ctx: dict) -> str:
     return await rem.collectors["ha"].restart_addon(ctx["addon"])
+
+
+async def _exec_dns_failover(rem: "Remediator", ctx: dict) -> str:
+    return await rem.collectors["unifi"].dns_failover(
+        ctx["adguard_ip"], ctx["failover_dns"]
+    )
+
+
+async def _revert_dns_failover(rem: "Remediator", ctx: dict) -> str:
+    return await rem.collectors["unifi"].dns_failback()
 
 
 async def _exec_wan_power_cycle(rem: "Remediator", ctx: dict) -> str:
@@ -195,6 +209,13 @@ SPECS: list[ActionSpec] = [
         lambda c: f"Power-cycle the modem/router ({c.get('entity', '?')})",
         _match_wan_power_cycle, _exec_wan_power_cycle, lifeline=True,
     ),
+    ActionSpec(
+        "unifi.dns_failover", "auto",
+        lambda c: f"Fail over LAN DNS to {c.get('failover_dns', '?')} "
+                  "(reverts when AdGuard recovers)",
+        _match_dns_failover, _exec_dns_failover, lifeline=True,
+        reverter=_revert_dns_failover,
+    ),
 ]
 
 
@@ -234,42 +255,92 @@ class Remediator:
 
     # -- planning -----------------------------------------------------------------
 
+    @staticmethod
+    def _rungs(check: CheckResult) -> list[dict]:
+        """The check's remediation ladder: primary fix, then fallbacks."""
+        rungs = []
+        if check.meta.get("remediation"):
+            rungs.append(check.meta["remediation"])
+        rungs.extend(check.meta.get("remediation_fallbacks") or [])
+        return rungs
+
+    def _match_spec(self, raw_ctx: dict) -> tuple[ActionSpec, dict] | None:
+        for spec in SPECS:
+            ctx = spec.matcher(dict(raw_ctx), self)
+            if ctx is not None:
+                return spec, ctx
+        return None
+
+    def _spec_blocked(self, incident_id: int, spec: ActionSpec) -> bool:
+        """Is this spec already represented for the incident?"""
+        rows = self.db.query(
+            "SELECT status, reverted FROM actions WHERE incident_id=? AND action=?",
+            (incident_id, spec.id),
+        )
+        for r in rows:
+            if r["status"] in ("pending", "approved"):
+                return True  # in flight / awaiting human
+            if r["status"] == "succeeded" and spec.reverter and not r["reverted"]:
+                return True  # mitigation currently active
+            if r["status"] == "unresolved" and not spec.lifeline:
+                return True  # ran fine, didn't help — don't repeat blindly
+        return False
+
     async def consider(self, incident: dict, check: CheckResult, auto_only: bool = False):
         """Returns None | ("auto", row) | ("approve", row) | ("off", label).
 
+        Walks the check's remediation ladder. A rung yields to the next when
+        it is exhausted (attempt budget spent), blocked, or switched off.
         auto_only: used while a check is flapping — only fully-automatic fixes
         may proceed (no silent pending approvals, no notification spam).
         """
         now = time.time()
-        for spec in SPECS:
-            ctx = spec.matcher(check, self)
-            if ctx is None:
+        rungs = self._rungs(check)
+        cooldown = self.cfg.remediation.auto_cooldown_minutes * 60
+        max_attempts = self.cfg.remediation.max_auto_attempts
+
+        for i, raw_ctx in enumerate(rungs):
+            matched = self._match_spec(raw_ctx)
+            if matched is None:
                 continue
+            spec, ctx = matched
+            has_next = i + 1 < len(rungs)
             target = ctx.get("name") or ctx.get("mac") or ctx.get("id") or "?"
             force_approve = bool(ctx.get("restart_loop"))
             tier = self.resolve_tier(spec.id, spec.default_tier, force_approve)
-            if tier == "off":
-                return ("off", spec.label(ctx))
+            attempts = self._attempts(spec.id, target, now)
+            spent = len(attempts) >= max_attempts
 
-            if tier == "auto":
-                attempts = self._attempts(spec.id, target, now)
-                if attempts:
-                    cooldown = self.cfg.remediation.auto_cooldown_minutes * 60
-                    if spec.lifeline:
-                        # Approval may be undeliverable while DNS/WAN is the
-                        # thing that's broken — keep retrying with doubling
-                        # backoff until the attempt budget runs out.
-                        if len(attempts) >= self.cfg.remediation.max_auto_attempts:
-                            log.warning("%s on %s: %d auto attempts exhausted — "
-                                        "requiring approval", spec.id, target, len(attempts))
-                            tier = "approve"
-                        elif now - max(attempts) < cooldown * 2 ** (len(attempts) - 1):
-                            return None  # back off quietly; reconsidered next poll
-                    elif now - max(attempts) < cooldown:
-                        log.info("%s on %s on cooldown — requiring approval",
-                                 spec.id, target)
+            if tier == "off":
+                if has_next:
+                    continue
+                return ("off", spec.label(ctx))
+            if self._spec_blocked(incident["id"], spec):
+                if spent and has_next:
+                    continue
+                return None
+            if tier == "auto" and attempts:
+                if spec.lifeline:
+                    # Approval may be undeliverable while DNS/WAN is the thing
+                    # that's broken — retry with doubling backoff, hand over to
+                    # the next rung when the budget is spent.
+                    if spent:
+                        if has_next:
+                            continue
+                        log.warning("%s on %s: %d auto attempts exhausted — "
+                                    "requiring approval", spec.id, target, len(attempts))
                         tier = "approve"
+                    elif now - max(attempts) < cooldown * 2 ** (len(attempts) - 1):
+                        return None  # back off quietly; reconsidered next poll
+                elif now - max(attempts) < cooldown:
+                    if has_next:
+                        continue
+                    log.info("%s on %s on cooldown — requiring approval",
+                             spec.id, target)
+                    tier = "approve"
             if auto_only and tier != "auto":
+                if has_next:
+                    continue
                 return None
 
             row = self._create_action(spec, ctx, target, tier, incident["id"], now)
@@ -303,8 +374,11 @@ class Remediator:
         except Exception as exc:  # noqa: BLE001
             detail = f"{type(exc).__name__}: {exc}"
             ok, status = False, "failed"
+        # Mitigations (reverter set) don't claim to resolve the incident, so
+        # they skip the "fix didn't help" verification.
         verify_deadline = (
-            now + self.cfg.remediation.verify_minutes * 60 if ok else None
+            now + self.cfg.remediation.verify_minutes * 60
+            if ok and spec.reverter is None else None
         )
         self.db.execute(
             "UPDATE actions SET status=?, executed=?, result=?, verify_deadline=? WHERE id=?",
@@ -327,6 +401,35 @@ class Remediator:
         self.db.execute("UPDATE actions SET status='approved' WHERE id=?", (action_id,))
         act["status"] = "approved"
         return await self.execute(act)
+
+    async def revert_orphans(self) -> None:
+        """Undo mitigations whose incident has closed (e.g. restore AdGuard as
+        DHCP DNS once it's healthy again). Runs from the sweeper, so failed
+        reverts retry automatically; failures alert at most hourly."""
+        rows = self.db.query(
+            "SELECT a.* FROM actions a JOIN incidents i ON i.id = a.incident_id "
+            "WHERE a.status='succeeded' AND a.reverted IS NULL AND i.closed IS NOT NULL"
+        )
+        for act in rows:
+            spec = self._specs.get(act["action"])
+            if spec is None or spec.reverter is None:
+                continue
+            ctx = json.loads(act.get("ctx") or "{}")
+            try:
+                detail = await spec.reverter(self, ctx)
+            except Exception as exc:  # noqa: BLE001
+                self.notifier.event(
+                    f"revertfail.{act['id']}", f"Revert FAILED: {act['label']}",
+                    f"{type(exc).__name__}: {exc} — will keep retrying.",
+                    severity="critical", dedup_minutes=60,
+                )
+                continue
+            self.db.execute(
+                "UPDATE actions SET reverted=? WHERE id=?", (time.time(), act["id"])
+            )
+            log.warning("reverted action %s on %s: %s", act["action"], act["target"], detail)
+            self.notifier.raw(f"Reverted: {act['label']}", detail,
+                              priority=3, tags=["rewind"])
 
     async def deny(self, action_id: int, token: str) -> tuple[bool, str]:
         act = self.db.query_one("SELECT * FROM actions WHERE id=?", (action_id,))

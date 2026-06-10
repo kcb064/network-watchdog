@@ -42,6 +42,20 @@ def extract_uplink(dev: dict) -> dict | None:
     return None
 
 
+DNS_KEYS = ("dhcpd_dns_1", "dhcpd_dns_2", "dhcpd_dns_3", "dhcpd_dns_4")
+
+
+def select_dns_networks(nets: list[dict], dns_ip: str) -> dict[str, dict]:
+    """Networks whose DHCP DNS hands out dns_ip → their original settings,
+    keyed by network id (used to fail over and later restore)."""
+    saved: dict[str, dict] = {}
+    for net in nets:
+        current = {k: net.get(k, "") or "" for k in DNS_KEYS}
+        if dns_ip in current.values():
+            saved[net["_id"]] = {"name": net.get("name", ""), **current}
+    return saved
+
+
 class UnifiClient:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -90,6 +104,9 @@ class UnifiClient:
 
     async def post(self, path: str, body: dict) -> list[dict]:
         return (await self._request("POST", path, body)).get("data", [])
+
+    async def put(self, path: str, body: dict) -> list[dict]:
+        return (await self._request("PUT", path, body)).get("data", [])
 
 
 class UnifiCollector(Collector):
@@ -243,3 +260,35 @@ class UnifiCollector(Collector):
             {"cmd": "power-cycle", "mac": switch_mac.lower(), "port_idx": int(port_idx)},
         )
         return f"PoE power-cycled port {port_idx} on {switch_mac}"
+
+    async def dns_failover(self, dns_ip: str, failover_dns: str) -> str:
+        """Point DHCP DNS of every network currently using dns_ip at
+        failover_dns; remember the originals for dns_failback()."""
+        nets = await self.client.get("rest/networkconf")
+        saved = select_dns_networks(nets, dns_ip)
+        if not saved:
+            raise RuntimeError(
+                f"no UniFi networks hand out {dns_ip} via DHCP — nothing to fail over"
+            )
+        for net_id in saved:
+            body = {k: "" for k in DNS_KEYS}
+            body["dhcpd_dns_1"] = failover_dns
+            body["dhcpd_dns_enabled"] = True
+            await self.client.put(f"rest/networkconf/{net_id}", body)
+        self.db.kv_set_json("unifi.dns_failover_saved", saved)
+        names = ", ".join(v["name"] or k for k, v in saved.items())
+        return (f"DHCP DNS → {failover_dns} on: {names}. Clients pick it up as "
+                "their leases renew.")
+
+    async def dns_failback(self) -> str:
+        saved = self.db.kv_get_json("unifi.dns_failover_saved") or {}
+        if not saved:
+            return "no failover state recorded — nothing to restore"
+        names = []
+        for net_id, vals in saved.items():
+            body = {k: vals.get(k, "") for k in DNS_KEYS}
+            body["dhcpd_dns_enabled"] = True
+            await self.client.put(f"rest/networkconf/{net_id}", body)
+            names.append(vals.get("name") or net_id)
+        self.db.kv_set_json("unifi.dns_failover_saved", {})
+        return f"restored original DHCP DNS on: {', '.join(names)}"

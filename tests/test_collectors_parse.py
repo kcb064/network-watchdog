@@ -105,3 +105,16 @@ def test_extract_uplink():
     assert extract_uplink(dev) == {"switch_mac": "aa:bb:cc", "port_idx": 8}
     assert extract_uplink({"uplink": {"type": "wireless"}}) is None  # mesh AP
     assert extract_uplink({}) is None
+
+
+def test_select_dns_networks():
+    from netwatch.collectors.unifi import select_dns_networks
+    nets = [
+        {"_id": "n1", "name": "LAN", "dhcpd_dns_1": "192.168.1.28", "dhcpd_dns_2": ""},
+        {"_id": "n2", "name": "IoT", "dhcpd_dns_1": "9.9.9.9"},
+        {"_id": "n3", "name": "Guest", "dhcpd_dns_2": "192.168.1.28"},
+    ]
+    saved = select_dns_networks(nets, "192.168.1.28")
+    assert set(saved) == {"n1", "n3"}
+    assert saved["n1"]["dhcpd_dns_1"] == "192.168.1.28"
+    assert saved["n3"]["name"] == "Guest"

@@ -227,35 +227,28 @@ class Engine:
                     if inc["last_notified"] > 0:
                         self.notifier.incident_closed(inc, annotation)
 
-        # An open incident may gain a remediation option later (e.g. AdGuard
-        # auto-re-enable grace period elapsing), so re-consider while open.
+        # An open incident may gain a remediation option later (retry after
+        # backoff, the next rung of a fallback chain, a grace period
+        # elapsing), so re-consider while open. consider() itself gates on
+        # in-flight/active actions per spec.
         if row["incident_id"] is not None and row["status"] != OK:
-            # Failed attempts don't block retry forever: the post-failure
-            # cooldown downgrades the next attempt to an approval request, and
-            # an expired approval frees the slot for a fresh auto attempt.
-            has_action = self.db.query_one(
-                "SELECT id FROM actions WHERE incident_id=? "
-                "AND status NOT IN ('expired','denied','failed')",
-                (row["incident_id"],),
+            inc = self.db.query_one(
+                "SELECT * FROM incidents WHERE id=?", (row["incident_id"],)
             )
-            if not has_action:
-                inc = self.db.query_one(
-                    "SELECT * FROM incidents WHERE id=?", (row["incident_id"],)
+            if inc and not inc["root_cause"]:
+                plan = await self.remediator.consider(
+                    inc, result, auto_only=bool(row["flapping"])
                 )
-                if inc and not inc["root_cause"]:
-                    plan = await self.remediator.consider(
-                        inc, result, auto_only=bool(row["flapping"])
+                if plan and plan[0] == "auto":
+                    await self.remediator.execute(plan[1])
+                elif plan and plan[0] == "approve":
+                    # A fix became available after the incident opened — the
+                    # approval buttons must actually reach the user.
+                    self.notifier.incident_opened(inc, result, approval=plan[1])
+                    self.db.execute(
+                        "UPDATE incidents SET last_notified=? WHERE id=?",
+                        (time.time(), inc["id"]),
                     )
-                    if plan and plan[0] == "auto":
-                        await self.remediator.execute(plan[1])
-                    elif plan and plan[0] == "approve":
-                        # A fix became available after the incident opened —
-                        # the approval buttons must actually reach the user.
-                        self.notifier.incident_opened(inc, result, approval=plan[1])
-                        self.db.execute(
-                            "UPDATE incidents SET last_notified=? WHERE id=?",
-                            (time.time(), inc["id"]),
-                        )
 
         self._save_row(row)
 
@@ -354,6 +347,7 @@ class Engine:
                 self._remind_open_incidents(now)
                 self._expire_actions(now)
                 await self._verify_actions(now)
+                await self.remediator.revert_orphans()
                 self._drop_stale_checks(now)
             except Exception:  # noqa: BLE001
                 log.exception("sweeper error")

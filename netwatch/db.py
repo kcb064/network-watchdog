@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS actions (
     executed REAL,
     verify_deadline REAL,
     result TEXT NOT NULL DEFAULT '',
-    ctx TEXT NOT NULL DEFAULT '{}'
+    ctx TEXT NOT NULL DEFAULT '{}',
+    reverted REAL
 );
 CREATE INDEX IF NOT EXISTS idx_actions_status ON actions (status);
 
@@ -90,6 +91,11 @@ class Database:
         with self._lock:
             self._conn.executescript("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             self._conn.executescript(SCHEMA)
+            # migrations for databases created before a column existed
+            try:
+                self._conn.execute("ALTER TABLE actions ADD COLUMN reverted REAL")
+            except sqlite3.OperationalError:
+                pass
             self._conn.commit()
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
