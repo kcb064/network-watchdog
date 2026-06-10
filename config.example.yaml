@@ -145,3 +145,11 @@ predictions:
   disk_warn_days: 14          # "pool full in N days" warning horizon
   mem_leak_window_hours: 24
   latency_z_threshold: 3.0
+
+# AI incident analysis (off unless an Anthropic API key is provided).
+ai:
+  enabled: true
+  api_key: "${ANTHROPIC_API_KEY}"
+  model: claude-opus-4-8      # claude-haiku-4-5 is ~5x cheaper
+  max_per_day: 20             # cap on automatic analyses (manual button uncapped)
+  min_gap_minutes: 30         # spacing between automatic analyses per incident

@@ -96,14 +96,19 @@ def main() -> None:
     if args.doctor:
         sys.exit(asyncio.run(doctor(cfg, db)))
 
+    from .ai import Analyst
     from .engine import Engine
     from .web import create_app
 
     notifier = Notifier(db, cfg)
     collectors = build_collectors(cfg, db)
     remediator = Remediator(db, cfg, collectors, notifier)
-    engine = Engine(db, cfg, notifier, remediator, collectors)
+    analyst = Analyst(db, cfg, notifier, collectors)
+    remediator.analyst = analyst
+    engine = Engine(db, cfg, notifier, remediator, collectors, analyst=analyst)
     app = create_app(engine)
+    if analyst.enabled:
+        log.info("AI incident analysis enabled (model %s)", cfg.ai.model)
 
     if not collectors:
         log.warning("no collectors enabled — dashboard will be empty until you edit config.yaml")

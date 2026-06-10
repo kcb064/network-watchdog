@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     opened REAL NOT NULL,
     closed REAL,
     root_cause TEXT,
-    last_notified REAL NOT NULL DEFAULT 0
+    last_notified REAL NOT NULL DEFAULT 0,
+    analysis TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_incidents_open ON incidents (closed, opened);
 
@@ -92,10 +93,14 @@ class Database:
             self._conn.executescript("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             self._conn.executescript(SCHEMA)
             # migrations for databases created before a column existed
-            try:
-                self._conn.execute("ALTER TABLE actions ADD COLUMN reverted REAL")
-            except sqlite3.OperationalError:
-                pass
+            for ddl in (
+                "ALTER TABLE actions ADD COLUMN reverted REAL",
+                "ALTER TABLE incidents ADD COLUMN analysis TEXT",
+            ):
+                try:
+                    self._conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass
             self._conn.commit()
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:

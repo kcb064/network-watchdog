@@ -128,23 +128,40 @@ function renderGroups(data, sparkData) {
   });
 }
 
+function detailCell(i) {
+  let html = esc(i.detail);
+  if (i.analysis) html += `<div class="analysis">🧠 ${esc(i.analysis)}</div>`;
+  return html;
+}
+
 function renderIncidents(data) {
   const now = data.app.now;
   const open = data.incidents.open.filter((i) => i.kind !== "prediction");
   const rows = [];
   for (const i of open) {
     rows.push(`<tr class="sev-${i.severity}">
-      <td>🔴 ${esc(i.title)}</td><td>${esc(i.detail)}</td>
+      <td>🔴 ${esc(i.title)} <button class="ai-btn" data-id="${i.id}" title="AI analysis">🧠</button></td>
+      <td>${detailCell(i)}</td>
       <td>open ${ago(i.opened, now)}${i.root_cause ? ` · caused by ${esc(i.root_cause)}` : ""}</td></tr>`);
   }
   for (const i of data.incidents.recent) {
     rows.push(`<tr>
-      <td>✅ ${esc(i.title)}</td><td>${esc(i.detail)}</td>
+      <td>✅ ${esc(i.title)}</td><td>${detailCell(i)}</td>
       <td>resolved ${ago(i.closed, now)} ago after ${ago(i.opened, i.closed)}</td></tr>`);
   }
   $("incidents").innerHTML = rows.length
     ? `<table><tr><th>Incident</th><th>Detail</th><th>When</th></tr>${rows.join("")}</table>`
     : `<div class="empty">No incidents. All quiet. 🌙</div>`;
+  document.querySelectorAll(".ai-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "⏳";
+      const r = await fetch(`/api/incidents/${btn.dataset.id}/analyze`, { method: "POST" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) alert(body.message || "analysis failed");
+      refresh();
+    });
+  });
 }
 
 function renderPredictions(data) {

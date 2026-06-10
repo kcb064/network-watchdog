@@ -68,6 +68,7 @@ Per-service checks:
 | `REMEDIATION_MODE` | `tiered` (default) / `approve_all` / `off` |
 | `ADGUARD_HA_ADDON` | AdGuard runs as an HA add-on → auto-restart it when it dies (slug, e.g. `a0d7b954_adguard`) |
 | `ADGUARD_FAILOVER_DNS` | AdGuard stays dead → switch UniFi DHCP DNS to this resolver, revert on recovery (e.g. `1.1.1.1`) |
+| `ANTHROPIC_API_KEY` (+ `AI_MODEL`) | AI incident analysis — Claude-written root-cause diagnosis on incidents and failed fixes |
 | `WAN_POWER_CYCLE_ENTITY` | HA smart plug on the modem → power-cycle when internet is hard-down |
 | `REMEDIATION_OVERRIDES` | Per-action tiers, e.g. `unifi.poe_cycle=auto,wan.power_cycle=auto` |
 | `WAN_ENABLED`, `DOCKER_ENABLED`, `UNIFI_ENABLED`, `HA_ENABLED`, `ADGUARD_ENABLED`, `TRUENAS_ENABLED` | Explicit on/off overrides |
@@ -155,6 +156,26 @@ REMEDIATION_OVERRIDES=unifi.restart_device=auto,unifi.poe_cycle=auto,wan.power_c
 - `never_touch` protects containers (default: `dockge`, `network-watchdog`).
 - Approval links are single-use tokens that expire after 60 min.
 - Every fix is verified: still broken 10 min later → escalation alert.
+
+## AI incident analysis (optional)
+
+Set `ANTHROPIC_API_KEY` (from [console.anthropic.com](https://console.anthropic.com))
+and every critical incident, failed fix, and fix-that-didn't-help gets a short
+Claude-written diagnosis — probable cause, evidence, next steps — pushed via
+ntfy and shown under the incident on the dashboard. The analyst sees what an
+SRE would: current check states, remediation history, metric summaries, and
+the failing container's logs (or HA's error log).
+
+- **Read-only by design.** The AI explains and suggests; it never executes
+  anything. The rules engine remains the only acting layer.
+- **Cost-bounded.** Automatic analyses are capped (default 20/day, 30-min
+  per-incident spacing); each costs a few cents with the default
+  `claude-opus-4-8` (set `AI_MODEL=claude-haiku-4-5` to make it ~5× cheaper).
+  The dashboard's 🧠 button analyzes on demand, uncapped.
+- **Injection-aware.** Logs fed to the model are marked untrusted, and model
+  output is only ever displayed — never executed.
+- Needs WAN (it's a cloud API): during a full internet outage, analysis is
+  unavailable while local rules keep acting.
 
 ## Security notes
 

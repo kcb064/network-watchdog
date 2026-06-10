@@ -160,6 +160,23 @@ def create_app(engine) -> FastAPI:
             result[name] = series
         return result
 
+    @app.post("/api/incidents/{incident_id}/analyze", dependencies=[Depends(auth)])
+    async def analyze(incident_id: int):
+        analyst = engine.analyst
+        if not analyst or not analyst.enabled:
+            return JSONResponse(
+                {"ok": False,
+                 "message": "AI analysis is not configured — set ANTHROPIC_API_KEY."},
+                status_code=400,
+            )
+        text = await analyst.analyze_incident(incident_id, "manual", force=True)
+        if not text:
+            return JSONResponse(
+                {"ok": False, "message": "analysis failed — check the watchdog logs"},
+                status_code=502,
+            )
+        return {"ok": True, "analysis": text}
+
     @app.post("/api/actions/{action_id}/approve")
     async def approve(action_id: int, token: str = Query(...)):
         ok, msg = await engine.remediator.approve(action_id, token)

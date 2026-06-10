@@ -39,6 +39,14 @@ needs the Linux socket, fails gracefully here).
   `latency_anomaly`) + `_manage()` which owns prediction-kind incidents.
 - `netwatch/notify.py` — ntfy JSON publish via persistent SQLite queue with
   backoff (survives WAN outages). Disabled topic ⇒ log-only.
+- `netwatch/ai.py` — opt-in Claude incident analyst (ANTHROPIC_API_KEY).
+  Read-only: bundles incident + checks + actions + metrics + container/HA
+  logs, calls the Messages API (anthropic SDK, adaptive thinking), stores
+  result in incidents.analysis + ntfy push. Triggers: critical open,
+  fix_failed, fix_unresolved (capped/spaced), manual via
+  POST /api/incidents/{id}/analyze (uncapped). Logs are untrusted input —
+  the system prompt hardens against instruction-following; output is
+  display-only, never executed.
 - Check keys are namespaced (`wan.ping`, `docker.container.<name>`,
   `truenas.pool.<name>`); the dashboard groups by first segment (see
   `web.py GROUPS`).

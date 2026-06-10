@@ -20,6 +20,21 @@ def container_name(info: dict) -> str:
     return names[0].lstrip("/")
 
 
+def demux_docker_logs(raw: bytes) -> str:
+    """Docker log endpoints frame non-tty output as 8-byte-header chunks
+    [stream, 0, 0, 0, len_be32]; tty containers send plain bytes."""
+    framed = len(raw) >= 8 and raw[0] in (0, 1, 2) and raw[1:4] == b"\x00\x00\x00"
+    if not framed:
+        return raw.decode("utf-8", "replace")
+    chunks = []
+    i = 0
+    while i + 8 <= len(raw):
+        size = int.from_bytes(raw[i + 4:i + 8], "big")
+        chunks.append(raw[i + 8:i + 8 + size])
+        i += 8 + size
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
 def classify_container(info: dict, inspect: dict | None) -> tuple[str, str, str, dict]:
     """Returns (status, severity, message, remediation_ctx)."""
     name = container_name(info)
@@ -196,3 +211,16 @@ class DockerCollector(Collector):
             if container_name(info) == name:
                 return await self.restart_container(info["Id"])
         raise RuntimeError(f"container {name!r} not found")
+
+    async def logs_tail(self, name: str, lines: int = 80) -> str:
+        r = await self._get("/containers/json", params={"all": "true"})
+        for info in r.json():
+            if container_name(info) == name:
+                lr = await self._http.get(
+                    f"/containers/{info['Id']}/logs",
+                    params={"stdout": "1", "stderr": "1", "tail": str(lines),
+                            "timestamps": "1"},
+                )
+                lr.raise_for_status()
+                return demux_docker_logs(lr.content)
+        return ""

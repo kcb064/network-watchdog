@@ -102,12 +102,14 @@ def find_root_cause(meta: dict, open_keys: set[str]) -> str | None:
 # --------------------------------------------------------------------------
 
 class Engine:
-    def __init__(self, db: Database, cfg: Config, notifier, remediator, collectors: dict):
+    def __init__(self, db: Database, cfg: Config, notifier, remediator, collectors: dict,
+                 analyst=None):
         self.db = db
         self.cfg = cfg
         self.notifier = notifier
         self.remediator = remediator
         self.collectors = collectors  # id -> collector instance
+        self.analyst = analyst
         self._tasks: list[asyncio.Task] = []
         self.started = time.time()
 
@@ -283,6 +285,8 @@ class Engine:
             self.notifier.incident_opened(inc, result, approval=plan[1])
         elif plan[0] == "off":
             self.notifier.incident_opened(inc, result, fix_note=f"Suggested fix: {plan[1]}")
+        if severity == "critical" and self.analyst:
+            self.analyst.spawn(inc_id, "incident_opened")
 
     def _recent_action_annotation(self, incident_id: int) -> str:
         act = self.db.query_one(
@@ -312,6 +316,8 @@ class Engine:
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        if self.analyst:
+            await self.analyst.aclose()
 
     async def _loop_collector(self, col) -> None:
         key = f"watchdog.collector.{col.id}"
@@ -389,6 +395,8 @@ class Engine:
                     priority=5, tags=["x"],
                 )
                 self.db.execute("UPDATE actions SET status='unresolved' WHERE id=?", (act["id"],))
+                if self.analyst:
+                    self.analyst.spawn(act["incident_id"], "fix_unresolved")
             else:
                 self.db.execute(
                     "UPDATE actions SET verify_deadline=NULL WHERE id=?", (act["id"],)

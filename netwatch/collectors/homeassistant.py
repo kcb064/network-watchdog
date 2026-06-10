@@ -46,6 +46,11 @@ class HomeAssistantCollector(Collector):
         r = await self._http.post(f"/api/services/{domain}/{service}", json=data)
         r.raise_for_status()
 
+    async def error_log_tail(self, lines: int = 60) -> str:
+        r = await self._http.get("/api/error_log")
+        r.raise_for_status()
+        return "\n".join(r.text.splitlines()[-lines:])
+
     async def restart_addon(self, slug: str) -> str:
         # Prefer the hassio.addon_restart service — the same mechanism HA
         # automations use, and friendlier to tokens than the raw /api/hassio

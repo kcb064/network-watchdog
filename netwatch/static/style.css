@@ -102,3 +102,14 @@ button.deny { background: var(--card2); color: var(--text); border: 1px solid va
   padding: .6rem .9rem; border-radius: 10px; margin-bottom: 1rem; font-size: .88rem;
 }
 footer { text-align: center; padding: 1rem; }
+
+.analysis {
+  margin-top: .4rem; padding: .45rem .6rem; border-left: 3px solid var(--accent);
+  background: var(--card2); border-radius: 6px; color: var(--text);
+  font-size: .82rem; white-space: pre-wrap;
+}
+.ai-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  cursor: pointer; font-size: .8rem; padding: .05rem .35rem; vertical-align: middle;
+}
+.ai-btn:hover { border-color: var(--accent); }

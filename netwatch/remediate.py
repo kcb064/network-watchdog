@@ -225,6 +225,7 @@ class Remediator:
         self.cfg = cfg
         self.collectors = collectors
         self.notifier = notifier
+        self.analyst = None  # set by main; fix failures trigger AI diagnosis
         self._specs = {s.id: s for s in SPECS}
 
     # -- tier policy ------------------------------------------------------------
@@ -387,6 +388,8 @@ class Remediator:
         self._record_attempt(act["action"], act["target"], now)
         log.warning("action %s on %s: %s (%s)", act["action"], act["target"], status, detail)
         self.notifier.action_result(act, ok, detail)
+        if not ok and self.analyst and act.get("incident_id"):
+            self.analyst.spawn(act["incident_id"], "fix_failed")
         return ok, detail
 
     async def approve(self, action_id: int, token: str) -> tuple[bool, str]:

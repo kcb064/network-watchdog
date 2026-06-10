@@ -57,6 +57,12 @@ services:
       WAN_POWER_CYCLE_ENTITY: ${WAN_POWER_CYCLE_ENTITY:-}  # e.g. switch.modem_plug
       # Per-action tier overrides (action=auto|approve|off, comma-separated):
       REMEDIATION_OVERRIDES: ${REMEDIATION_OVERRIDES:-}    # e.g. unifi.poe_cycle=auto
+
+      # -- AI incident analysis (optional; needs a key from console.anthropic.com)
+      # When set, incidents get a Claude-written root-cause diagnosis pushed
+      # via ntfy and shown on the dashboard. Read-only: the AI never acts.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-claude-opus-4-8}
     volumes:
       # Docker socket: container monitoring + restart remediation. Use ":ro"
       # and REMEDIATION_MODE=off for a strictly read-only watchdog.

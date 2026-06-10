@@ -143,6 +143,16 @@ class PredictionsConfig(_Base):
     latency_z_threshold: float = 3.0
 
 
+class AIConfig(_Base):
+    """Claude-powered incident analysis. Off unless an API key is set."""
+
+    enabled: bool = True
+    api_key: str = ""                  # ANTHROPIC_API_KEY
+    model: str = "claude-opus-4-8"     # AI_MODEL to override (e.g. claude-haiku-4-5)
+    max_per_day: int = 20              # cap on automatic analyses (manual is uncapped)
+    min_gap_minutes: int = 30          # per-incident spacing for automatic analyses
+
+
 class ServerConfig(_Base):
     port: int = 8787
     public_url: str = ""     # e.g. http://192.168.1.2:8787 — needed for ntfy action buttons
@@ -165,6 +175,7 @@ class Config(_Base):
     docker: DockerConfig = Field(default_factory=DockerConfig)
     remediation: RemediationConfig = Field(default_factory=RemediationConfig)
     predictions: PredictionsConfig = Field(default_factory=PredictionsConfig)
+    ai: AIConfig = Field(default_factory=AIConfig)
 
     missing_env: set[str] = Field(default_factory=set, exclude=True)
 
@@ -203,7 +214,7 @@ _SERVICE_ENV = {
 _ENABLED_ENV = {
     "unifi": "UNIFI_ENABLED", "home_assistant": "HA_ENABLED",
     "adguard": "ADGUARD_ENABLED", "truenas": "TRUENAS_ENABLED",
-    "wan": "WAN_ENABLED", "docker": "DOCKER_ENABLED",
+    "wan": "WAN_ENABLED", "docker": "DOCKER_ENABLED", "ai": "AI_ENABLED",
 }
 _SIMPLE_ENV = {
     "NTFY_SERVER": ("ntfy", "server"), "NTFY_TOPIC": ("ntfy", "topic"),
@@ -213,6 +224,8 @@ _SIMPLE_ENV = {
     "HEARTBEAT_URL": ("server", "heartbeat_url"),
     "REMEDIATION_MODE": ("remediation", "mode"),
     "WAN_POWER_CYCLE_ENTITY": ("wan", "power_cycle_entity"),
+    "ANTHROPIC_API_KEY": ("ai", "api_key"),
+    "AI_MODEL": ("ai", "model"),
 }
 
 
