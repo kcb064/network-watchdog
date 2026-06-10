@@ -1,0 +1,99 @@
+"""Parsing/classification helpers in collectors (no network needed)."""
+from netwatch.collectors.adguard import normalize_processing_ms
+from netwatch.collectors.base import slug
+from netwatch.collectors.docker_ import classify_container, container_name
+from netwatch.collectors.homeassistant import summarize_unavailable
+from netwatch.collectors.truenas import alert_severity, classify_pool
+from netwatch.collectors.unifi import map_subsystem
+from netwatch.models import FAIL, OK, WARN
+
+
+def test_container_name():
+    assert container_name({"Names": ["/plex"]}) == "plex"
+    assert container_name({}) == "unknown"
+
+
+def test_classify_running_healthy():
+    info = {"Id": "x", "Names": ["/plex"], "State": "running", "Status": "Up 3 hours (healthy)"}
+    status, sev, msg, rem = classify_container(info, None)
+    assert status == OK and not rem
+
+
+def test_classify_unhealthy_offers_restart():
+    info = {"Id": "x", "Names": ["/plex"], "State": "running",
+            "Status": "Up 3 hours (unhealthy)"}
+    status, sev, msg, rem = classify_container(info, None)
+    assert status == FAIL
+    assert rem["kind"] == "restart_container" and rem["reason"] == "unhealthy"
+
+
+def test_classify_crashed_vs_stopped():
+    info = {"Id": "x", "Names": ["/app"], "State": "exited", "Status": "Exited (1) 5m ago"}
+    inspect = {"State": {"ExitCode": 1}}
+    status, _, msg, rem = classify_container(info, inspect)
+    assert status == FAIL and rem["reason"] == "crashed"
+
+    inspect_ok = {"State": {"ExitCode": 0}}
+    status, _, msg, rem = classify_container(
+        {"Id": "x", "Names": ["/job"], "State": "exited", "Status": "Exited (0)"}, inspect_ok
+    )
+    assert status == OK and not rem
+
+
+def test_classify_restart_loop():
+    info = {"Id": "x", "Names": ["/bad"], "State": "restarting",
+            "Status": "Restarting (1) 2 seconds ago"}
+    status, _, msg, rem = classify_container(info, None)
+    assert status == FAIL and rem.get("restart_loop") is True
+
+
+def test_adguard_unit_normalization():
+    assert normalize_processing_ms(0.014) == 14.0   # seconds -> ms
+    assert normalize_processing_ms(23.5) == 23.5    # already ms
+
+
+def test_truenas_pool_classification():
+    ok_pool = {"name": "tank", "status": "ONLINE", "healthy": True,
+               "size": 1000, "allocated": 400}
+    assert classify_pool(ok_pool, 85)[0] == OK
+
+    full = dict(ok_pool, allocated=900)
+    status, sev, msg = classify_pool(full, 85)
+    assert status == WARN and "90%" in msg
+
+    degraded = dict(ok_pool, status="DEGRADED", healthy=False)
+    status, sev, msg = classify_pool(degraded, 85)
+    assert status == FAIL and sev == "critical"
+
+    faulted = dict(ok_pool, status="FAULTED")
+    assert classify_pool(faulted, 85)[1] == "critical"
+
+
+def test_truenas_alert_severity():
+    assert alert_severity("CRITICAL") == "critical"
+    assert alert_severity("WARNING") == "warn"
+    assert alert_severity("info") == "warn"
+
+
+def test_unifi_subsystem_mapping():
+    assert map_subsystem("ok") == (OK, "critical")
+    assert map_subsystem("warning") == (WARN, "warn")
+    assert map_subsystem("error") == (FAIL, "critical")
+    assert map_subsystem("unknown") == (OK, "critical")  # unused subsystem: silent
+
+
+def test_ha_unavailable_summary():
+    states = [
+        {"entity_id": "light.kitchen", "state": "on"},
+        {"entity_id": "sensor.temp", "state": "unavailable"},
+        {"entity_id": "sensor.hum", "state": "unavailable"},
+        {"entity_id": "switch.fan", "state": "unknown"},  # unknown is often legit
+    ]
+    total, unavailable, top = summarize_unavailable(states)
+    assert total == 4 and unavailable == 2
+    assert "sensor (2)" in top
+
+
+def test_slug():
+    assert slug("Living Room AP") == "Living-Room-AP"
+    assert slug("  ") == "unnamed"

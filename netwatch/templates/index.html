@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network Watchdog</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🐕</text></svg>">
+</head>
+<body>
+<header>
+  <div class="brand">🐕 <strong>Network Watchdog</strong> <span class="ver">v{{ version }}</span></div>
+  <div class="header-right">
+    <span id="overall" class="pill">…</span>
+    <span id="meta" class="muted"></span>
+  </div>
+</header>
+
+<main>
+  <section id="banner" class="hidden"></section>
+
+  <section id="approvals-section" class="hidden">
+    <h2>⏳ Pending approvals</h2>
+    <div id="approvals"></div>
+  </section>
+
+  <section id="predictions-section" class="hidden">
+    <h2>🔮 Predictions</h2>
+    <div id="predictions"></div>
+  </section>
+
+  <section>
+    <div id="groups" class="grid"></div>
+  </section>
+
+  <section>
+    <h2>🚨 Incidents</h2>
+    <div id="incidents"></div>
+  </section>
+
+  <section>
+    <h2>🔧 Remediation log</h2>
+    <div id="audit"></div>
+  </section>
+</main>
+
+<footer class="muted">Network Watchdog — refreshed <span id="refreshed">never</span></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

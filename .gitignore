@@ -1,0 +1,12 @@
+# local environments & runtime state — never commit
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+data-*/
+config/
+.env
+ntfy-cache/
+.claude/settings.local.json

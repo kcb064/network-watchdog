@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+config/
+tests/
+.env
+*.md
+.git/
+ntfy-cache/

@@ -1,0 +1,128 @@
+# Network Watchdog configuration.
+# Secrets use dollar-brace placeholders and come from the .env file next to
+# docker-compose.yml. After editing, restart the container (redeploy in Dockge).
+
+server:
+  port: 8787
+  # Set this to the URL your PHONE can reach, e.g. http://192.168.1.2:8787 —
+  # it powers the Approve/Deny buttons inside ntfy notifications.
+  public_url: ""
+  # Optional HTTP basic auth for the dashboard (username "admin"):
+  password: "${WATCHDOG_PASSWORD}"
+  # Dead man's switch (optional): a healthchecks.io check URL pinged every
+  # minute. If the NAS itself dies, healthchecks.io alerts you — the one
+  # failure mode this watchdog cannot see from inside.
+  heartbeat_url: ""
+  retention_days: 30
+  log_level: INFO
+
+poll:
+  fast: 30      # seconds — availability checks
+  medium: 120   # seconds — stats and metrics
+  slow: 3600    # seconds — predictions
+
+state:
+  open_after: 3        # consecutive bad polls before an incident opens (~90 s)
+  close_after: 2       # consecutive good polls before it closes
+  flap_threshold: 6    # state changes within the window => "flapping", alerts muted
+  flap_window_minutes: 60
+  flap_calm_minutes: 30
+  remind_hours: 6      # re-notify still-open critical incidents (0 = never)
+
+ntfy:
+  enabled: true
+  server: https://ntfy.sh          # or your self-hosted ntfy URL
+  topic: "${NTFY_TOPIC}"
+  token: "${NTFY_TOKEN}"
+  notify_recoveries: true
+  startup_message: true
+
+# ---------------------------------------------------------------------------
+# Monitored services — flip enabled: true and fill in URLs (prefer IPs over
+# hostnames so monitoring still works when DNS/AdGuard is the thing that broke).
+# ---------------------------------------------------------------------------
+
+unifi:
+  enabled: false
+  url: https://192.168.1.1          # UDM/UDR console or controller URL
+  username: "${UNIFI_USERNAME}"
+  password: "${UNIFI_PASSWORD}"
+  site: default
+  verify_ssl: false
+  device_offline_severity: warn     # set to "critical" for urgent push on AP/switch loss
+
+home_assistant:
+  enabled: false
+  url: http://192.168.1.10:8123
+  token: "${HA_TOKEN}"
+  # If HA runs as a container on THIS NAS, its container name enables
+  # "restart HA" remediation (approval required by default):
+  container_name: ""
+  unavailable_warn_pct: 10          # warn when >10% of entities are unavailable
+
+adguard:
+  enabled: false
+  url: http://192.168.1.5:3000      # AdGuard web UI address
+  username: "${ADGUARD_USERNAME}"
+  password: "${ADGUARD_PASSWORD}"
+  # Protection found disabled: notify immediately, auto re-enable after N minutes.
+  # 0 = re-enable right away, -1 = never auto re-enable.
+  auto_reenable_after_minutes: 30
+  avg_processing_warn_ms: 300
+
+truenas:
+  enabled: false
+  url: https://192.168.1.2          # TrueNAS web UI address
+  api_key: "${TRUENAS_API_KEY}"
+  verify_ssl: false
+  pool_capacity_warn_pct: 85
+  host_metrics: true                # CPU/RAM via /proc (we run on the NAS)
+
+wan:
+  enabled: true
+  ping_targets: ["1.1.1.1", "8.8.8.8"]
+  ping_count: 5
+  method: auto                      # auto | icmp | tcp
+  dns_test_domain: example.com
+  # Default: your AdGuard IP (if enabled) + 1.1.1.1, so AdGuard failures are
+  # distinguished from ISP DNS failures. Override to be explicit:
+  dns_servers: []
+  http_targets: ["https://www.gstatic.com/generate_204"]
+  loss_warn_pct: 10
+  loss_fail_pct: 60
+
+docker:
+  enabled: true
+  socket: /var/run/docker.sock
+  stats: true                       # per-container CPU/RAM (every ~2 min)
+  exclude: []                       # name patterns to ignore, e.g. ["*-job", "backup-*"]
+  restart_loop_count: 3
+  restart_loop_window_minutes: 15
+
+# ---------------------------------------------------------------------------
+# Remediation. mode: tiered | approve_all | off
+#   tiered      — safe actions run automatically, risky ones ask first
+#   approve_all — everything asks first
+#   off         — diagnose and suggest only
+#
+# Default tiers: docker.restart_container=auto, adguard.enable_protection=auto,
+#                ha.restart_container=approve,  unifi.restart_device=approve
+# Restart loops always require approval (a restart rarely fixes those).
+# ---------------------------------------------------------------------------
+remediation:
+  mode: tiered
+  overrides: {}
+  #  e.g.
+  #  overrides:
+  #    docker.restart_container: approve
+  #    unifi.restart_device: off
+  never_touch: ["dockge", "network-watchdog"]   # containers never auto-restarted
+  auto_cooldown_minutes: 30   # same auto-fix won't repeat within this window
+  approval_ttl_minutes: 60
+  verify_minutes: 10          # escalate if the problem persists after a fix
+
+predictions:
+  enabled: true
+  disk_warn_days: 14          # "pool full in N days" warning horizon
+  mem_leak_window_hours: 24
+  latency_z_threshold: 3.0
