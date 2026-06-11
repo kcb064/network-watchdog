@@ -3,7 +3,7 @@ from netwatch.collectors.adguard import normalize_processing_ms
 from netwatch.collectors.base import slug
 from netwatch.collectors.docker_ import classify_container, container_name
 from netwatch.collectors.homeassistant import failed_entries, summarize_unavailable
-from netwatch.collectors.truenas import alert_severity, classify_pool
+from netwatch.collectors.truenas import alert_severity, classify_pool, ws_url
 from netwatch.collectors.unifi import extract_uplink, map_subsystem
 from netwatch.models import FAIL, OK, WARN
 
@@ -67,6 +67,11 @@ def test_truenas_pool_classification():
 
     faulted = dict(ok_pool, status="FAULTED")
     assert classify_pool(faulted, 85)[1] == "critical"
+
+
+def test_truenas_ws_url():
+    assert ws_url("https://192.168.1.250") == "wss://192.168.1.250/api/current"
+    assert ws_url("http://truenas.local/") == "ws://truenas.local/api/current"
 
 
 def test_truenas_alert_severity():

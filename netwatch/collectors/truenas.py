@@ -1,7 +1,14 @@
 """TrueNAS SCALE collector: pool health/capacity, system alerts (SMART etc.),
-reboot detection, plus host CPU/RAM via /proc (we run on the NAS itself)."""
+reboot detection, plus host CPU/RAM via /proc (we run on the NAS itself).
+
+Talks JSON-RPC 2.0 over WebSocket (/api/current, TrueNAS 25.04+) — the
+supported API. Falls back to the deprecated REST /api/v2.0 on older
+versions; REST is removed in TrueNAS 26.04.
+"""
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
 
@@ -13,6 +20,16 @@ from .base import Collector, slug
 log = logging.getLogger("netwatch.truenas")
 
 ALERT_BAD = {"ERROR", "CRITICAL", "ALERT", "EMERGENCY"}
+
+
+def ws_url(base: str) -> str:
+    """The JSON-RPC WebSocket endpoint for a TrueNAS web UI URL."""
+    base = base.rstrip("/")
+    if base.startswith("https://"):
+        base = "wss://" + base[len("https://"):]
+    elif base.startswith("http://"):
+        base = "ws://" + base[len("http://"):]
+    return base + "/api/current"
 
 
 def classify_pool(pool: dict, warn_pct: float) -> tuple[str, str, str]:
@@ -52,6 +69,8 @@ class TruenasCollector(Collector):
             headers={"Authorization": f"Bearer {self.tcfg.api_key}"},
             verify=self.tcfg.verify_ssl, timeout=20,
         )
+        self._mode: str | None = None  # "rpc" | "rest", decided on first success
+        self._rpc_id = 0
         if self.tcfg.host_metrics:
             try:
                 import psutil
@@ -62,17 +81,107 @@ class TruenasCollector(Collector):
     async def aclose(self) -> None:
         await self._http.aclose()
 
+    # -- transports ----------------------------------------------------------------
+
+    async def _fetch_rpc(self) -> dict:
+        import ssl as ssl_mod
+
+        import websockets
+
+        url = ws_url(self.tcfg.url)
+        kwargs: dict = {"open_timeout": 10, "close_timeout": 5, "max_size": 2 ** 24}
+        if url.startswith("wss://") and not self.tcfg.verify_ssl:
+            ctx = ssl_mod.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl_mod.CERT_NONE
+            kwargs["ssl"] = ctx
+
+        async with websockets.connect(url, **kwargs) as ws:
+            async def call(method: str, params: list):
+                self._rpc_id += 1
+                rid = self._rpc_id
+                await ws.send(json.dumps(
+                    {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
+                ))
+                while True:  # skip server notifications; match our request id
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=20))
+                    if msg.get("id") == rid:
+                        if "error" in msg:
+                            err = msg["error"] or {}
+                            raise RuntimeError(err.get("message") or str(err))
+                        return msg.get("result")
+
+            try:
+                authed = await call("auth.login_with_api_key", [self.tcfg.api_key])
+            except RuntimeError as exc:
+                raise PermissionError(
+                    f"API key rejected ({exc}) — check TRUENAS_API_KEY"
+                ) from exc
+            if authed is not True:
+                raise PermissionError("API key rejected — check TRUENAS_API_KEY")
+
+            data: dict = {"info": await call("system.info", [])}
+            for key, method, params in (
+                ("pools", "pool.query", []),
+                ("alerts", "alert.list", []),
+                ("temps", "disk.temperatures", [[]]),
+            ):
+                try:
+                    data[key] = await call(method, params)
+                except Exception as exc:  # noqa: BLE001 — partial data is fine
+                    log.debug("%s failed: %s", method, exc)
+                    data[key] = None
+            return data
+
+    async def _fetch_rest(self) -> dict:
+        r = await self._http.get("/system/info")
+        if r.status_code in (401, 403):
+            raise PermissionError(f"HTTP {r.status_code} — check TRUENAS_API_KEY")
+        r.raise_for_status()
+        data: dict = {"info": r.json(), "pools": None, "alerts": None, "temps": None}
+        for key, fetch in (
+            ("pools", lambda: self._http.get("/pool")),
+            ("alerts", lambda: self._http.get("/alert/list")),
+            ("temps", lambda: self._http.post("/disk/temperatures", json={"names": []})),
+        ):
+            try:
+                rr = await fetch()
+                rr.raise_for_status()
+                data[key] = rr.json()
+            except Exception as exc:  # noqa: BLE001
+                log.debug("REST %s failed: %s", key, exc)
+        return data
+
+    async def _fetch(self) -> dict:
+        if self._mode == "rest":
+            return await self._fetch_rest()
+        try:
+            data = await self._fetch_rpc()
+            if self._mode is None:
+                log.info("TrueNAS: using JSON-RPC over WebSocket (/api/current)")
+                self._mode = "rpc"
+            return data
+        except PermissionError:
+            raise  # bad key fails on every transport; don't mask it
+        except Exception as exc:
+            if self._mode == "rpc":
+                raise  # RPC was working — surface the outage, don't flap transports
+            data = await self._fetch_rest()  # raises too if TrueNAS is down
+            log.warning(
+                "TrueNAS JSON-RPC unavailable (%s) — using deprecated REST API "
+                "(removed in TrueNAS 26.04)", exc,
+            )
+            self._mode = "rest"
+            return data
+
+    # -- collection -------------------------------------------------------------------
+
     async def collect(self) -> CollectorOutput:
         out = CollectorOutput()
         try:
-            r = await self._http.get("/system/info")
-            r.raise_for_status()
-            info = r.json()
-        except httpx.HTTPStatusError as exc:
-            msg = f"HTTP {exc.response.status_code}"
-            if exc.response.status_code in (401, 403):
-                msg += " — check TRUENAS_API_KEY"
-            out.checks.append(CheckResult("truenas.api", FAIL, msg, severity="warn",
+            data = await self._fetch()
+        except PermissionError as exc:
+            out.checks.append(CheckResult("truenas.api", FAIL, str(exc), severity="warn",
                                           meta={"name": "TrueNAS API"}))
             self._host_metrics(out)
             return out
@@ -84,10 +193,13 @@ class TruenasCollector(Collector):
             self._host_metrics(out)
             return out
 
+        info = data.get("info") or {}
         version = info.get("version", "?")
         uptime = float(info.get("uptime_seconds") or 0)
+        api_note = "JSON-RPC" if self._mode == "rpc" else "REST (deprecated)"
         out.checks.append(CheckResult(
-            "truenas.api", OK, f"{version}, up {uptime / 86400:.1f} d", severity="warn",
+            "truenas.api", OK,
+            f"{version}, up {uptime / 86400:.1f} d, via {api_note}", severity="warn",
             meta={"name": "TrueNAS API"},
         ))
         prev_uptime = float(self.db.kv_get("truenas.uptime") or 0)
@@ -103,9 +215,12 @@ class TruenasCollector(Collector):
             out.samples.append(Sample("truenas.load1", float(loadavg[0])))
 
         self._host_metrics(out)
-        await self._pools(out)
-        await self._alerts(out)
-        await self._disk_temps(out)
+        if data.get("pools") is not None:
+            self._process_pools(out, data["pools"])
+        if data.get("alerts") is not None:
+            self._process_alerts(out, data["alerts"])
+        if data.get("temps"):
+            self._process_temps(out, data["temps"])
         return out
 
     def _host_metrics(self, out: CollectorOutput) -> None:
@@ -122,14 +237,7 @@ class TruenasCollector(Collector):
         except Exception as exc:  # noqa: BLE001
             log.debug("host metrics failed: %s", exc)
 
-    async def _pools(self, out: CollectorOutput) -> None:
-        try:
-            r = await self._http.get("/pool")
-            r.raise_for_status()
-            pools = r.json()
-        except Exception as exc:  # noqa: BLE001
-            log.debug("pool query failed: %s", exc)
-            return
+    def _process_pools(self, out: CollectorOutput, pools: list[dict]) -> None:
         for pool in pools:
             name = pool.get("name", "?")
             status, sev, msg = classify_pool(pool, self.tcfg.pool_capacity_warn_pct)
@@ -148,15 +256,8 @@ class TruenasCollector(Collector):
                     Sample("truenas.pool.used_pct", allocated / size * 100, {"pool": name})
                 )
 
-    async def _alerts(self, out: CollectorOutput) -> None:
-        try:
-            r = await self._http.get("/alert/list")
-            r.raise_for_status()
-            alerts = [a for a in r.json() if not a.get("dismissed")]
-        except Exception as exc:  # noqa: BLE001
-            log.debug("alert query failed: %s", exc)
-            return
-
+    def _process_alerts(self, out: CollectorOutput, all_alerts: list[dict]) -> None:
+        alerts = [a for a in all_alerts if not a.get("dismissed")]
         out.samples.append(Sample("truenas.alerts_active", len(alerts)))
         bad = [a for a in alerts if (a.get("level") or "").upper() in ALERT_BAD]
         warnish = [a for a in alerts if (a.get("level") or "").upper() == "WARNING"]
@@ -197,13 +298,7 @@ class TruenasCollector(Collector):
                 ))
         self.db.kv_set_json("truenas.seen_alerts", new_seen[-200:])
 
-    async def _disk_temps(self, out: CollectorOutput) -> None:
-        try:
-            r = await self._http.post("/disk/temperatures", json={"names": []})
-            r.raise_for_status()
-            temps = r.json() or {}
-            for disk, temp in temps.items():
-                if isinstance(temp, (int, float)):
-                    out.samples.append(Sample("truenas.disk.temp_c", temp, {"disk": disk}))
-        except Exception as exc:  # noqa: BLE001
-            log.debug("disk temps unavailable: %s", exc)
+    def _process_temps(self, out: CollectorOutput, temps: dict) -> None:
+        for disk, temp in (temps or {}).items():
+            if isinstance(temp, (int, float)):
+                out.samples.append(Sample("truenas.disk.temp_c", temp, {"disk": disk}))

@@ -66,6 +66,9 @@ needs the Linux socket, fails gracefully here).
 - DB schema changes: SCHEMA in db.py uses CREATE IF NOT EXISTS only; for
   existing deployments add ALTER-based migration or bump a schema version.
 - deps in requirements.txt are range-pinned; pydantic comes via fastapi.
+- TrueNAS collector speaks JSON-RPC 2.0 over WebSocket (/api/current,
+  25.04+; auth.login_with_api_key) with sticky fallback to deprecated REST
+  /api/v2.0 (removed in TrueNAS 26.04). Don't add new REST calls.
 - CI (.github/workflows/ci.yml): pytest on push/PR; pushes to main publish
   multi-arch (amd64/arm64) image to ghcr.io/kcb064/network-watchdog with
   :latest + :sha-* tags (v* tags add semver). Repo + image are PUBLIC (MIT).

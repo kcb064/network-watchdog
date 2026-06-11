@@ -7,3 +7,4 @@ PyYAML>=6.0,<7
 psutil>=6.0,<8
 icmplib>=3.0,<4
 dnspython>=2.6,<3
+websockets>=12,<17
