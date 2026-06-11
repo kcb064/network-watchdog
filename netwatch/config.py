@@ -151,6 +151,9 @@ class AIConfig(_Base):
     model: str = "claude-opus-4-8"     # AI_MODEL to override (e.g. claude-haiku-4-5)
     max_per_day: int = 20              # cap on automatic analyses (manual is uncapped)
     min_gap_minutes: int = 30          # per-incident spacing for automatic analyses
+    # Free-text facts about YOUR lab the analyst can't infer from config —
+    # what hardware hosts what, where the Zigbee radio lives, etc. (AI_CONTEXT)
+    context: str = ""
 
 
 class ServerConfig(_Base):
@@ -226,6 +229,7 @@ _SIMPLE_ENV = {
     "WAN_POWER_CYCLE_ENTITY": ("wan", "power_cycle_entity"),
     "ANTHROPIC_API_KEY": ("ai", "api_key"),
     "AI_MODEL": ("ai", "model"),
+    "AI_CONTEXT": ("ai", "context"),
 }
 
 

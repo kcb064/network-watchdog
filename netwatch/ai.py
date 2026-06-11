@@ -31,7 +31,23 @@ auto-remediates (container restarts, HA add-on restarts, PoE port cycles, DHCP
 DNS failover with auto-revert) — your job is root-cause analysis and advice,
 not action.
 
-Reply in plain text, under 180 words, in exactly this shape:
+Reasoning rules:
+- Respect the Topology section: services on DIFFERENT hosts share nothing but
+  the network. A disk/CPU/RAM problem on one host cannot directly degrade a
+  service on another host — only network paths (DNS, routing, PoE) cross hosts.
+  Never assume two services share hardware unless the data says so.
+- Timing correlation is weak evidence. The operator deliberately breaks things
+  to test, and identical "since"/"opened" timestamps often just mean the
+  watchdog restarted and re-evaluated everything at once. Prefer a concrete
+  causal mechanism over "they happened together"; simultaneous incidents may be
+  independent.
+- Diagnose THIS incident. Other open problems belong in your answer only if a
+  real mechanism connects them — otherwise at most one sentence noting they
+  look independent.
+- If more than one cause is plausible, give the top two with a confidence
+  (high/medium/low) for each.
+
+Reply in plain text, under 200 words, in exactly this shape:
 Probable cause: <one or two sentences, most likely explanation first>
 Evidence: <the specific signals in the data that support it>
 Next steps: <1-3 numbered, concrete actions a homelab admin can take>
@@ -152,6 +168,36 @@ class Analyst:
 
     # -- context bundle -----------------------------------------------------------
 
+    def _topology(self) -> str:
+        from urllib.parse import urlparse
+
+        services = []
+        for label, section in (
+            ("Home Assistant (+ its add-ons, incl. AdGuard)", self.cfg.home_assistant),
+            ("AdGuard Home API", self.cfg.adguard),
+            ("TrueNAS", self.cfg.truenas),
+            ("UniFi controller/gateway", self.cfg.unifi),
+        ):
+            if section.enabled:
+                host = urlparse(section.url).hostname
+                if host:
+                    services.append((label, host))
+        lines = [f"- {label}: host {host}" for label, host in services]
+        by_host: dict[str, list[str]] = {}
+        for label, host in services:
+            by_host.setdefault(host, []).append(label)
+        for host, labels in by_host.items():
+            if len(labels) > 1:
+                lines.append(f"- co-located on {host}: {' + '.join(labels)}")
+        lines.append(
+            "- The watchdog and its monitored Docker containers run on the TrueNAS host."
+        )
+        if len(by_host) > 1:
+            lines.append(
+                "- Hosts listed above with different addresses are SEPARATE machines."
+            )
+        return "# Topology (derived from configuration)\n" + "\n".join(lines)
+
     async def _build_bundle(self, inc: dict, trigger: str) -> str:
         now = time.time()
         parts: list[str] = []
@@ -162,6 +208,17 @@ class Analyst:
             f"detail: {inc['detail']}\nopened: {_ts(inc['opened'])}"
             + (f"\nclosed: {_ts(inc['closed'])}" if inc.get("closed") else "")
         )
+        parts.append(self._topology())
+        if self.cfg.ai.context:
+            parts.append("# Operator notes (trusted)\n" + _clip(self.cfg.ai.context, 1500))
+        if inc["key"].startswith("ha."):
+            sample = self.db.kv_get_json("ha.unavailable_sample", [])
+            if sample:
+                parts.append(
+                    "# Sample of currently-unavailable HA entities "
+                    "(entity ids reveal which integration died)\n"
+                    + "\n".join(f"- {e}" for e in sample[:30])
+                )
 
         bad = self.db.query(
             "SELECT key, status, message, since FROM check_states "

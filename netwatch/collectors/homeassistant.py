@@ -115,6 +115,10 @@ class HomeAssistantCollector(Collector):
             return out
 
         total, unavailable, top = summarize_unavailable(states)
+        # Entity ids reveal which integration died — kept for the AI analyst.
+        sample = [s["entity_id"] for s in states
+                  if s.get("state") == "unavailable" and "entity_id" in s][:30]
+        self.db.kv_set_json("ha.unavailable_sample", sample)
         out.samples.append(Sample("ha.entities_total", total))
         out.samples.append(Sample("ha.entities_unavailable", unavailable))
         pct = unavailable / total * 100 if total else 0

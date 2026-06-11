@@ -79,6 +79,38 @@ def test_bundle_contains_context(env):
     assert "UNTRUSTED" not in b  # no log sections without collectors
 
 
+def test_bundle_topology_separates_hosts(env):
+    db, cfg, notifier, analyst, inc_id = env
+    cfg.home_assistant.enabled = True
+    cfg.home_assistant.url = "http://192.168.1.28:8123"
+    cfg.truenas.enabled = True
+    cfg.truenas.url = "https://192.168.1.250"
+    cfg.adguard.enabled = True
+    cfg.adguard.url = "http://192.168.1.28:3000"
+    asyncio.run(analyst.analyze_incident(inc_id, "manual", force=True))
+    b = analyst.last_bundle
+    assert "# Topology" in b
+    assert "192.168.1.28" in b and "192.168.1.250" in b
+    assert "co-located on 192.168.1.28" in b
+    assert "SEPARATE machines" in b
+
+
+def test_bundle_ha_entity_sample_and_operator_notes(env):
+    db, cfg, notifier, analyst, inc_id = env
+    cfg.ai.context = "HA runs on a dedicated mini-PC, not the NAS."
+    db.kv_set_json("ha.unavailable_sample",
+                   ["media_player.plex_living_room", "device_tracker.unifi_phone"])
+    cur = db.execute(
+        "INSERT INTO incidents (key, severity, title, detail, opened) VALUES (?,?,?,?,?)",
+        ("ha.entities", "warn", "HA entities degraded", "565/1906 unavailable",
+         time.time()),
+    )
+    asyncio.run(analyst.analyze_incident(cur.lastrowid, "manual", force=True))
+    b = analyst.last_bundle
+    assert "media_player.plex_living_room" in b
+    assert "Operator notes" in b and "mini-PC" in b
+
+
 def test_per_incident_gap(env):
     db, cfg, notifier, analyst, inc_id = env
     assert asyncio.run(analyst.analyze_incident(inc_id, "incident_opened")) is not None

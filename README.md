@@ -68,7 +68,7 @@ Per-service checks:
 | `REMEDIATION_MODE` | `tiered` (default) / `approve_all` / `off` |
 | `ADGUARD_HA_ADDON` | AdGuard runs as an HA add-on → auto-restart it when it dies (slug, e.g. `a0d7b954_adguard`) |
 | `ADGUARD_FAILOVER_DNS` | AdGuard stays dead → switch UniFi DHCP DNS to this resolver, revert on recovery (e.g. `1.1.1.1`) |
-| `ANTHROPIC_API_KEY` (+ `AI_MODEL`) | AI incident analysis — Claude-written root-cause diagnosis on incidents and failed fixes |
+| `ANTHROPIC_API_KEY` (+ `AI_MODEL`, `AI_CONTEXT`) | AI incident analysis — Claude-written root-cause diagnosis on incidents and failed fixes; `AI_CONTEXT` = facts about your lab it can't infer |
 | `WAN_POWER_CYCLE_ENTITY` | HA smart plug on the modem → power-cycle when internet is hard-down |
 | `REMEDIATION_OVERRIDES` | Per-action tiers, e.g. `unifi.poe_cycle=auto,wan.power_cycle=auto` |
 | `WAN_ENABLED`, `DOCKER_ENABLED`, `UNIFI_ENABLED`, `HA_ENABLED`, `ADGUARD_ENABLED`, `TRUENAS_ENABLED` | Explicit on/off overrides |
@@ -174,6 +174,11 @@ the failing container's logs (or HA's error log).
   The dashboard's 🧠 button analyzes on demand, uncapped.
 - **Injection-aware.** Logs fed to the model are marked untrusted, and model
   output is only ever displayed — never executed.
+- **Knows your layout.** The bundle includes a topology section derived from
+  your configured URLs (which services share a host, which are separate
+  machines) plus a sample of unavailable HA entities when relevant. Add
+  `AI_CONTEXT` with anything it can't infer ("HA runs on a mini-PC, Zigbee
+  dongle on the HA box") — one sentence here noticeably sharpens diagnoses.
 - Needs WAN (it's a cloud API): during a full internet outage, analysis is
   unavailable while local rules keep acting.
 
