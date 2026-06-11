@@ -121,11 +121,14 @@ mode: tiered            # in config.yaml
 | `docker.restart_container` | **auto** | crashed or unhealthy containers; max once per 30 min per container, never for restart-loops |
 | `adguard.enable_protection` | **auto** | only after the grace period (default 30 min) |
 | `adguard.restart_ha_addon` | **auto** | AdGuard-as-HA-add-on stopped answering (needs `ADGUARD_HA_ADDON`) |
+| `ha.reload_integration` | **auto** | HA integrations stuck in `setup_error`/`setup_retry` → reload exactly those config entries |
+| `ha.restart_core` | approve | next rung when integration reloads don't stick |
 | `ha.restart_container` | approve | needs `home_assistant.container_name` set |
 | `unifi.restart_device` | approve | offered when a device is hung (CPU/RAM maxed) |
 | `unifi.poe_cycle` | approve | AP went offline → power-cycle its PoE port on the upstream switch (uplink learned while the AP was online) |
 | `wan.power_cycle` | approve | internet hard-down → power-cycle the modem via an HA smart plug (needs `WAN_POWER_CYCLE_ENTITY`); always turns power back on, with retries |
 | `unifi.dns_failover` | **auto** | fallback rung behind the AdGuard restarts: switches UniFi DHCP DNS to `ADGUARD_FAILOVER_DNS`, **auto-reverts when AdGuard recovers**. Clients pick up the change as DHCP leases renew |
+| `docker.restart_memleak` | approve | a memory-leak *prediction* offers a restart before the container OOMs |
 
 Fixes can form **fallback chains**: when a rung's attempt budget is spent, the
 next rung takes over while the earlier one keeps retrying on its backoff

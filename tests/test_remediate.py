@@ -187,6 +187,8 @@ class FakeHA:
     def __init__(self):
         self.addons = []
         self.calls = []
+        self.reloaded = []
+        self.core_restarts = 0
 
     async def restart_addon(self, slug):
         self.addons.append(slug)
@@ -194,6 +196,13 @@ class FakeHA:
 
     async def call_service(self, domain, service, data):
         self.calls.append((domain, service, data.get("entity_id")))
+
+    async def reload_config_entry(self, entry_id):
+        self.reloaded.append(entry_id)
+
+    async def restart_core(self):
+        self.core_restarts += 1
+        return "Home Assistant Core restart requested"
 
 
 def offline_ap_check():
@@ -438,6 +447,74 @@ def test_wan_power_cycle_needs_ha_collector(env):
     check = CheckResult(
         "wan.ping", FAIL, "Internet unreachable",
         meta={"remediation": {"kind": "wan_power_cycle", "entity": "switch.modem_plug"}},
+    )
+    assert asyncio.run(rem.consider(incident, check)) is None
+
+
+def integrations_check():
+    return CheckResult(
+        "ha.integrations", FAIL, "2 integrations failed", severity="warn",
+        meta={"name": "HA integrations",
+              "remediation": {"kind": "ha_reload_entries", "name": "HA integrations",
+                              "entries": [{"id": "e1", "title": "Plex"},
+                                          {"id": "e2", "title": "UniFi"}]},
+              "remediation_fallbacks": [{"kind": "ha_restart_core",
+                                         "name": "Home Assistant core"}]},
+    )
+
+
+def test_reload_integrations_auto_then_executes(env):
+    db, cfg, docker, rem, incident = env
+    ha = FakeHA()
+    rem.collectors["ha"] = ha
+    plan = asyncio.run(rem.consider(incident, integrations_check()))
+    assert plan is not None and plan[0] == "auto"
+    ok, detail = asyncio.run(rem.execute(plan[1]))
+    assert ok
+    assert ha.reloaded == ["e1", "e2"]
+
+
+def test_ladder_advances_past_unresolved_reload_to_core_restart(env):
+    db, cfg, docker, rem, incident = env
+    ha = FakeHA()
+    rem.collectors["ha"] = ha
+    # rung 1 already ran and didn't help
+    db.execute(
+        "INSERT INTO actions (created, action, target, tier, status, incident_id)"
+        " VALUES (?,?,?,?,?,?)",
+        (time.time() - 900, "ha.reload_integration", "HA integrations", "auto",
+         "unresolved", incident["id"]),
+    )
+    db.kv_set_json("act_hist:ha.reload_integration:HA integrations",
+                   [time.time() - 900])
+    plan = asyncio.run(rem.consider(incident, integrations_check()))
+    assert plan is not None and plan[0] == "approve"
+    assert plan[1]["action"] == "ha.restart_core"
+    ok, _ = asyncio.run(rem.approve(plan[1]["id"], plan[1]["token"]))
+    assert ok and ha.core_restarts == 1
+
+
+def test_memleak_restart_defaults_to_approval_and_skips_verify(env):
+    db, cfg, docker, rem, incident = env
+    check = CheckResult(
+        "predict.memleak.plex", FAIL, "leaking", severity="warn",
+        meta={"name": "Container plex",
+              "remediation": {"kind": "memleak_restart", "name": "plex"}},
+    )
+    plan = asyncio.run(rem.consider(incident, check))
+    assert plan is not None and plan[0] == "approve"
+    ok, _ = asyncio.run(rem.approve(plan[1]["id"], plan[1]["token"]))
+    assert ok and docker.restarted == ["plex"]
+    row = db.query_one("SELECT verify_deadline FROM actions WHERE id=?", (plan[1]["id"],))
+    assert row["verify_deadline"] is None  # trend recovers slower than verify window
+
+
+def test_memleak_restart_respects_never_touch(env):
+    db, cfg, docker, rem, incident = env
+    cfg.remediation.never_touch = ["plex"]
+    check = CheckResult(
+        "predict.memleak.plex", FAIL, "leaking", severity="warn",
+        meta={"remediation": {"kind": "memleak_restart", "name": "plex"}},
     )
     assert asyncio.run(rem.consider(incident, check)) is None
 

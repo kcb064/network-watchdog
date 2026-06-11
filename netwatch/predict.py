@@ -14,6 +14,8 @@ import math
 import time
 from collections import defaultdict
 
+from .models import FAIL, CheckResult
+
 log = logging.getLogger("netwatch.predict")
 
 LEAK_WARN_DAYS = 7.0   # warn when a leak would exhaust host RAM within a week
@@ -130,13 +132,13 @@ def _series_by_label(db, metric: str, since: float, label: str) -> dict[str, lis
 
 # -- main entry ---------------------------------------------------------------------
 
-def run(engine) -> None:
+async def run(engine) -> None:
     cfg = engine.cfg.predictions
     if not cfg.enabled:
         return
     now = time.time()
     _disk_fill(engine, now, cfg)
-    _memory_leaks(engine, now, cfg)
+    await _memory_leaks(engine, now, cfg)
     _wan_latency(engine, now, cfg)
 
 
@@ -164,7 +166,32 @@ def _disk_fill(engine, now: float, cfg) -> None:
                 f"Pool {pool} fill trend", detail, metric_value=eta)
 
 
-def _memory_leaks(engine, now: float, cfg) -> None:
+async def _offer_leak_restart(engine, name: str, key: str) -> None:
+    """One restart offer per leak incident, via the normal approval flow."""
+    inc = engine.db.query_one(
+        "SELECT * FROM incidents WHERE key=? AND closed IS NULL", (key,)
+    )
+    if not inc:
+        return
+    if engine.db.query_one(
+        "SELECT id FROM actions WHERE incident_id=?", (inc["id"],)
+    ):
+        return  # already offered (or acted) for this leak
+    check = CheckResult(
+        key, FAIL, inc["detail"], severity="warn",
+        meta={"name": f"Container {name}",
+              "remediation": {"kind": "memleak_restart", "name": name}},
+    )
+    plan = await engine.remediator.consider(inc, check)
+    if plan and plan[0] == "auto":  # only via explicit user override
+        await engine.remediator.execute(plan[1])
+    elif plan and plan[0] == "approve":
+        engine.notifier.incident_opened(inc, approval=plan[1])
+        engine.db.execute("UPDATE incidents SET last_notified=? WHERE id=?",
+                          (time.time(), inc["id"]))
+
+
+async def _memory_leaks(engine, now: float, cfg) -> None:
     db = engine.db
     window = cfg.mem_leak_window_hours * 3600
     series = _series_by_label(db, "docker.container.mem_bytes", now - window, "name")
@@ -197,6 +224,8 @@ def _memory_leaks(engine, now: float, cfg) -> None:
         )
         _manage(engine, f"predict.memleak.{name}", active,
                 f"Possible memory leak: {name}", detail, metric_value=eta_days)
+        if active:
+            await _offer_leak_restart(engine, name, f"predict.memleak.{name}")
 
 
 def _wan_latency(engine, now: float, cfg) -> None:

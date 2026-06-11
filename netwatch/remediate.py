@@ -37,6 +37,9 @@ class ActionSpec:
     # Mitigations (e.g. DNS failover) are undone when their incident closes.
     # They don't claim to resolve the incident, so they skip fix-verification.
     reverter: Callable | None = None  # async (remediator, ctx) -> str
+    # verify=False also skips the "fix didn't help" check for actions whose
+    # effect is slower than the verify window (e.g. memory-trend restarts).
+    verify: bool = True
 
 
 # -- matchers (receive one remediation ctx dict from the check's ladder) ---------
@@ -106,6 +109,30 @@ def _match_dns_failover(ctx: dict, rem: "Remediator") -> dict | None:
     return dict(ctx)
 
 
+def _match_reload_entries(ctx: dict, rem: "Remediator") -> dict | None:
+    if ctx.get("kind") != "ha_reload_entries" or "ha" not in rem.collectors:
+        return None
+    if not ctx.get("entries"):
+        return None
+    return dict(ctx)
+
+
+def _match_ha_restart_core(ctx: dict, rem: "Remediator") -> dict | None:
+    if ctx.get("kind") != "ha_restart_core" or "ha" not in rem.collectors:
+        return None
+    return dict(ctx)
+
+
+def _match_memleak_restart(ctx: dict, rem: "Remediator") -> dict | None:
+    if ctx.get("kind") != "memleak_restart" or "docker" not in rem.collectors:
+        return None
+    name = ctx.get("name", "")
+    if not name or any(fnmatch.fnmatch(name, pat)
+                       for pat in rem.cfg.remediation.never_touch):
+        return None
+    return dict(ctx)
+
+
 # -- executors ------------------------------------------------------------------
 
 async def _exec_restart_container(rem: "Remediator", ctx: dict) -> str:
@@ -148,6 +175,26 @@ async def _exec_dns_failover(rem: "Remediator", ctx: dict) -> str:
 
 async def _revert_dns_failover(rem: "Remediator", ctx: dict) -> str:
     return await rem.collectors["unifi"].dns_failback()
+
+
+async def _exec_reload_entries(rem: "Remediator", ctx: dict) -> str:
+    ha = rem.collectors["ha"]
+    results = []
+    for entry in ctx["entries"][:5]:
+        try:
+            await ha.reload_config_entry(entry["id"])
+            results.append(f"{entry.get('title', entry['id'])}: reloaded")
+        except Exception as exc:  # noqa: BLE001 — report per-entry outcomes
+            results.append(f"{entry.get('title', entry['id'])}: {exc}")
+    return "; ".join(results)
+
+
+async def _exec_ha_restart_core(rem: "Remediator", ctx: dict) -> str:
+    return await rem.collectors["ha"].restart_core()
+
+
+async def _exec_memleak_restart(rem: "Remediator", ctx: dict) -> str:
+    return await rem.collectors["docker"].restart_by_name(ctx["name"])
 
 
 async def _exec_wan_power_cycle(rem: "Remediator", ctx: dict) -> str:
@@ -215,6 +262,22 @@ SPECS: list[ActionSpec] = [
                   "(reverts when AdGuard recovers)",
         _match_dns_failover, _exec_dns_failover, lifeline=True,
         reverter=_revert_dns_failover,
+    ),
+    ActionSpec(
+        "ha.reload_integration", "auto",
+        lambda c: "Reload failed HA integration(s): " + ", ".join(
+            e.get("title", "?") for e in (c.get("entries") or [])[:5]),
+        _match_reload_entries, _exec_reload_entries,
+    ),
+    ActionSpec(
+        "ha.restart_core", "approve",
+        lambda c: "Restart Home Assistant Core (integration reloads didn't stick)",
+        _match_ha_restart_core, _exec_ha_restart_core,
+    ),
+    ActionSpec(
+        "docker.restart_memleak", "approve",
+        lambda c: f"Restart {c.get('name', '?')} to reclaim leaked memory",
+        _match_memleak_restart, _exec_memleak_restart, verify=False,
     ),
 ]
 
@@ -317,7 +380,9 @@ class Remediator:
                     continue
                 return ("off", spec.label(ctx))
             if self._spec_blocked(incident["id"], spec):
-                if spent and has_next:
+                # A blocked rung (in flight, active mitigation, or proven
+                # unhelpful) yields to the rest of the ladder.
+                if has_next:
                     continue
                 return None
             if tier == "auto" and attempts:
@@ -379,7 +444,7 @@ class Remediator:
         # they skip the "fix didn't help" verification.
         verify_deadline = (
             now + self.cfg.remediation.verify_minutes * 60
-            if ok and spec.reverter is None else None
+            if ok and spec.reverter is None and spec.verify else None
         )
         self.db.execute(
             "UPDATE actions SET status=?, executed=?, result=?, verify_deadline=? WHERE id=?",

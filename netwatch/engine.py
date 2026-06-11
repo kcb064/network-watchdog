@@ -418,7 +418,7 @@ class Engine:
         await asyncio.sleep(120)
         while True:
             try:
-                predict.run(self)
+                await predict.run(self)
             except Exception:  # noqa: BLE001
                 log.exception("prediction error")
             await asyncio.sleep(self.cfg.poll.slow)

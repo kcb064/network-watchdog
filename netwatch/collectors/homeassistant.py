@@ -14,6 +14,16 @@ from .base import Collector
 log = logging.getLogger("netwatch.ha")
 
 
+BAD_ENTRY_STATES = {"setup_error", "setup_retry", "migration_error"}
+
+
+def failed_entries(entries: list[dict]) -> list[dict]:
+    """Config entries (integrations) that failed to set up, excluding ones the
+    user disabled on purpose."""
+    return [e for e in entries
+            if e.get("state") in BAD_ENTRY_STATES and not e.get("disabled_by")]
+
+
 def summarize_unavailable(states: list[dict]) -> tuple[int, int, str]:
     """Returns (total, unavailable_count, 'top offender domains' text)."""
     total = len(states)
@@ -51,6 +61,23 @@ class HomeAssistantCollector(Collector):
         r.raise_for_status()
         return "\n".join(r.text.splitlines()[-lines:])
 
+    async def list_config_entries(self) -> list[dict]:
+        r = await self._http.get("/api/config/config_entries/entry")
+        r.raise_for_status()
+        return r.json()
+
+    async def reload_config_entry(self, entry_id: str) -> None:
+        r = await self._http.post(
+            f"/api/config/config_entries/entry/{entry_id}/reload", timeout=60
+        )
+        r.raise_for_status()
+
+    async def restart_core(self) -> str:
+        r = await self._http.post("/api/services/homeassistant/restart", json={},
+                                  timeout=60)
+        r.raise_for_status()
+        return "Home Assistant Core restart requested"
+
     async def restart_addon(self, slug: str) -> str:
         # Prefer the hassio.addon_restart service — the same mechanism HA
         # automations use, and friendlier to tokens than the raw /api/hassio
@@ -68,6 +95,40 @@ class HomeAssistantCollector(Collector):
             )
         r.raise_for_status()
         return f"add-on {slug} restart requested"
+
+    def _handle_integrations(self, out: CollectorOutput, entries: list[dict]) -> None:
+        bad = failed_entries(entries)
+        out.samples.append(Sample("ha.integrations_failed", len(bad)))
+        if not bad:
+            out.checks.append(CheckResult(
+                "ha.integrations", OK, f"{len(entries)} integrations loaded",
+                severity="warn", meta={"name": "HA integrations"},
+            ))
+            return
+        detail = "; ".join(
+            f"{e.get('title') or e.get('domain', '?')} [{e.get('state')}]"
+            + (f": {e['reason']}" if e.get("reason") else "")
+            for e in bad[:5]
+        )
+        out.checks.append(CheckResult(
+            "ha.integrations", FAIL,
+            f"{len(bad)} integration(s) failed to set up — {detail}",
+            severity="warn",
+            meta={
+                "name": "HA integrations",
+                "remediation": {
+                    "kind": "ha_reload_entries", "name": "HA integrations",
+                    "entries": [
+                        {"id": e["entry_id"],
+                         "title": e.get("title") or e.get("domain", "?")}
+                        for e in bad[:5] if e.get("entry_id")
+                    ],
+                },
+                "remediation_fallbacks": [
+                    {"kind": "ha_restart_core", "name": "Home Assistant core"},
+                ],
+            },
+        ))
 
     def _down_meta(self) -> dict:
         meta = {"name": "Home Assistant"}
@@ -140,6 +201,14 @@ class HomeAssistantCollector(Collector):
             if s.get("entity_id", "").startswith("update.") and s.get("state") == "on"
         )
         out.samples.append(Sample("ha.updates_available", updates))
+
+        # Failed integrations: the precise cause behind entity blackouts, with
+        # a reload->restart-core remediation ladder attached.
+        try:
+            entries = await self.list_config_entries()
+            self._handle_integrations(out, entries)
+        except Exception as exc:  # noqa: BLE001 — older HA / non-admin token
+            log.debug("config entries unavailable: %s", exc)
 
         try:
             r = await self._http.get("/api/config")

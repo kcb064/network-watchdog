@@ -219,6 +219,16 @@ class Analyst:
                     "(entity ids reveal which integration died)\n"
                     + "\n".join(f"- {e}" for e in sample[:30])
                 )
+        if inc["key"].startswith("docker.container."):
+            name = inc["key"].removeprefix("docker.container.")
+            img = self.db.kv_get_json(f"docker.image.{name}") or {}
+            if img.get("changed") and now - img["changed"] < 72 * 3600:
+                parts.append(
+                    "# Image change note\n"
+                    f"Container '{name}' (image {img.get('tag', '?')}) got a new image id "
+                    f"{(now - img['changed']) / 3600:.1f} h ago. If the problem started "
+                    "after that, suspect a bad update."
+                )
 
         bad = self.db.query(
             "SELECT key, status, message, since FROM check_states "

@@ -95,6 +95,20 @@ def test_bundle_topology_separates_hosts(env):
     assert "SEPARATE machines" in b
 
 
+def test_bundle_image_change_note(env):
+    db, cfg, notifier, analyst, inc_id = env
+    db.kv_set_json("docker.image.plex",
+                   {"id": "sha256:new", "tag": "plexinc/pms:latest",
+                    "changed": time.time() - 2 * 3600})
+    cur = db.execute(
+        "INSERT INTO incidents (key, severity, title, detail, opened) VALUES (?,?,?,?,?)",
+        ("docker.container.plex", "warn", "Container plex DOWN", "crashed", time.time()),
+    )
+    asyncio.run(analyst.analyze_incident(cur.lastrowid, "manual", force=True))
+    assert "Image change note" in analyst.last_bundle
+    assert "plexinc/pms:latest" in analyst.last_bundle
+
+
 def test_bundle_ha_entity_sample_and_operator_notes(env):
     db, cfg, notifier, analyst, inc_id = env
     cfg.ai.context = "HA runs on a dedicated mini-PC, not the NAS."

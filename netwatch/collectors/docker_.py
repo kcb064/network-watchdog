@@ -77,6 +77,7 @@ class DockerCollector(Collector):
         self._http = httpx.AsyncClient(transport=transport, base_url="http://docker", timeout=15)
         self._poll_n = 0
         self._restart_counts: dict[str, list[tuple[float, int]]] = {}
+        self._image_cache: dict[str, dict] = {}
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -88,6 +89,23 @@ class DockerCollector(Collector):
         r = await self._http.get(path, **kw)
         r.raise_for_status()
         return r
+
+    def _track_image(self, name: str, info: dict, now: float) -> None:
+        """Remember when a container's image last changed — 'crashed right
+        after an update' is the AI analyst's favourite clue."""
+        img_id = info.get("ImageID", "")
+        if not img_id:
+            return
+        prev = self._image_cache.get(name)
+        if prev is None:
+            prev = self.db.kv_get_json(f"docker.image.{name}") or {}
+        if prev.get("id") != img_id:
+            record = {"id": img_id, "tag": info.get("Image", ""),
+                      "changed": now if prev else 0}
+            self.db.kv_set_json(f"docker.image.{name}", record)
+            self._image_cache[name] = record
+        else:
+            self._image_cache[name] = prev
 
     def _track_restart_loop(self, cid: str, restart_count: int, now: float) -> bool:
         window = self.dcfg.restart_loop_window_minutes * 60
@@ -144,6 +162,7 @@ class DockerCollector(Collector):
         inspected = await asyncio.gather(*(inspect_if_needed(i) for i in watched))
         for info, inspect in inspected:
             name = container_name(info)
+            self._track_image(name, info, now)
             status, sev, msg, rem = classify_container(info, inspect)
             if inspect is not None:
                 rc = (inspect.get("RestartCount")

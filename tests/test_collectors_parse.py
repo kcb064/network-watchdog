@@ -2,7 +2,7 @@
 from netwatch.collectors.adguard import normalize_processing_ms
 from netwatch.collectors.base import slug
 from netwatch.collectors.docker_ import classify_container, container_name
-from netwatch.collectors.homeassistant import summarize_unavailable
+from netwatch.collectors.homeassistant import failed_entries, summarize_unavailable
 from netwatch.collectors.truenas import alert_severity, classify_pool
 from netwatch.collectors.unifi import extract_uplink, map_subsystem
 from netwatch.models import FAIL, OK, WARN
@@ -97,6 +97,19 @@ def test_ha_unavailable_summary():
 def test_slug():
     assert slug("Living Room AP") == "Living-Room-AP"
     assert slug("  ") == "unnamed"
+
+
+def test_failed_entries():
+    entries = [
+        {"entry_id": "a", "state": "loaded", "title": "Fine"},
+        {"entry_id": "b", "state": "setup_error", "title": "Plex", "reason": "auth"},
+        {"entry_id": "c", "state": "setup_retry", "title": "UniFi"},
+        {"entry_id": "d", "state": "setup_error", "title": "Off",
+         "disabled_by": "user"},
+        {"entry_id": "e", "state": "not_loaded", "title": "Lazy"},
+    ]
+    bad = failed_entries(entries)
+    assert [e["entry_id"] for e in bad] == ["b", "c"]
 
 
 def test_extract_uplink():
