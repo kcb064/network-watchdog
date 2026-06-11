@@ -39,7 +39,8 @@ class AdguardCollector(Collector):
     def _down_meta(self) -> dict:
         """Remediation ladder for AdGuard-unreachable: restart the HA add-on
         first; if that's exhausted (or unavailable), fail the LAN's DHCP DNS
-        over to a public resolver until AdGuard recovers."""
+        over to the first *healthy* candidate (e.g. secondary AdGuard, then a
+        public resolver) until AdGuard recovers."""
         meta: dict = {"name": "AdGuard Home"}
         if self.acfg.ha_addon and self.cfg.home_assistant.enabled:
             meta["remediation"] = {
@@ -48,10 +49,12 @@ class AdguardCollector(Collector):
             }
         if self.acfg.failover_dns and self.cfg.unifi.enabled:
             host = urlparse(self.acfg.url).hostname or ""
-            if host:
+            candidates = [s.strip() for s in self.acfg.failover_dns.split(",")
+                          if s.strip()]
+            if host and candidates:
                 meta["remediation_fallbacks"] = [{
                     "kind": "dns_failover", "adguard_ip": host,
-                    "failover_dns": self.acfg.failover_dns, "name": "LAN DNS",
+                    "candidates": candidates, "name": "LAN DNS",
                 }]
         return meta
 

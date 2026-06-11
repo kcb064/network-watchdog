@@ -354,6 +354,7 @@ class Engine:
                 self._expire_actions(now)
                 await self._verify_actions(now)
                 await self.remediator.revert_orphans()
+                await self.remediator.maintain_failover()
                 self._drop_stale_checks(now)
             except Exception:  # noqa: BLE001
                 log.exception("sweeper error")

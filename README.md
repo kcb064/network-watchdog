@@ -69,7 +69,7 @@ Per-service checks:
 | `HEARTBEAT_URL` | Dead man's switch (healthchecks.io) |
 | `REMEDIATION_MODE` | `tiered` (default) / `approve_all` / `off` |
 | `ADGUARD_HA_ADDON` | AdGuard runs as an HA add-on → auto-restart it when it dies (slug, e.g. `a0d7b954_adguard`) |
-| `ADGUARD_FAILOVER_DNS` | AdGuard stays dead → switch UniFi DHCP DNS to this resolver, revert on recovery (e.g. `1.1.1.1`) |
+| `ADGUARD_FAILOVER_DNS` | Ordered failover candidates (comma-separated, e.g. `192.168.1.250,1.1.1.1`): AdGuard stays dead → UniFi DHCP DNS switches to the first *healthy* candidate, re-points if that one dies, reverts on recovery |
 | `ANTHROPIC_API_KEY` (+ `AI_MODEL`, `AI_CONTEXT`) | AI incident analysis — Claude-written root-cause diagnosis on incidents and failed fixes; `AI_CONTEXT` = facts about your lab it can't infer |
 | `WAN_POWER_CYCLE_ENTITY` | HA smart plug on the modem → power-cycle when internet is hard-down |
 | `REMEDIATION_OVERRIDES` | Per-action tiers, e.g. `unifi.poe_cycle=auto,wan.power_cycle=auto` |
@@ -129,7 +129,7 @@ mode: tiered            # in config.yaml
 | `unifi.restart_device` | approve | offered when a device is hung (CPU/RAM maxed) |
 | `unifi.poe_cycle` | approve | AP went offline → power-cycle its PoE port on the upstream switch (uplink learned while the AP was online) |
 | `wan.power_cycle` | approve | internet hard-down → power-cycle the modem via an HA smart plug (needs `WAN_POWER_CYCLE_ENTITY`); always turns power back on, with retries |
-| `unifi.dns_failover` | **auto** | fallback rung behind the AdGuard restarts: switches UniFi DHCP DNS to `ADGUARD_FAILOVER_DNS`, **auto-reverts when AdGuard recovers**. Clients pick up the change as DHCP leases renew |
+| `unifi.dns_failover` | **auto** | fallback rung behind the AdGuard restarts: probes the `ADGUARD_FAILOVER_DNS` candidates in order and switches UniFi DHCP DNS to the first one that answers (e.g. secondary AdGuard before raw `1.1.1.1`). While active, a sweeper re-points if the chosen target dies and upgrades back when a preferred candidate recovers; **auto-reverts to the primary when AdGuard recovers**. Clients pick up changes as DHCP leases renew |
 | `docker.restart_memleak` | approve | a memory-leak *prediction* offers a restart before the container OOMs |
 
 Fixes can form **fallback chains**: when a rung's attempt budget is spent, the

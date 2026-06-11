@@ -104,9 +104,12 @@ def _match_wan_power_cycle(ctx: dict, rem: "Remediator") -> dict | None:
 def _match_dns_failover(ctx: dict, rem: "Remediator") -> dict | None:
     if ctx.get("kind") != "dns_failover" or "unifi" not in rem.collectors:
         return None
-    if not ctx.get("adguard_ip") or not ctx.get("failover_dns"):
+    candidates = list(ctx.get("candidates") or [])
+    if not candidates and ctx.get("failover_dns"):
+        candidates = [ctx["failover_dns"]]
+    if not ctx.get("adguard_ip") or not candidates:
         return None
-    return dict(ctx)
+    return dict(ctx, candidates=candidates)
 
 
 def _match_reload_entries(ctx: dict, rem: "Remediator") -> dict | None:
@@ -167,10 +170,40 @@ async def _exec_ha_addon_restart(rem: "Remediator", ctx: dict) -> str:
     return await rem.collectors["ha"].restart_addon(ctx["addon"])
 
 
+async def _dns_responds(server: str, timeout: float = 3.0) -> bool:
+    import dns.asyncresolver
+
+    resolver = dns.asyncresolver.Resolver(configure=False)
+    resolver.nameservers = [server]
+    resolver.lifetime = timeout
+    try:
+        await resolver.resolve("example.com", "A")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _pick_dns_candidate(candidates: list[str]) -> str | None:
+    """First candidate that actually answers DNS, in preference order."""
+    for server in candidates:
+        if await _dns_responds(server):
+            return server
+    return None
+
+
 async def _exec_dns_failover(rem: "Remediator", ctx: dict) -> str:
-    return await rem.collectors["unifi"].dns_failover(
-        ctx["adguard_ip"], ctx["failover_dns"]
-    )
+    candidates = ctx["candidates"]
+    target = await _pick_dns_candidate(candidates)
+    if target is None:
+        raise RuntimeError(
+            f"no failover DNS candidate is answering: {', '.join(candidates)}"
+        )
+    detail = await rem.collectors["unifi"].dns_failover(ctx["adguard_ip"], target)
+    rem.db.kv_set_json("unifi.dns_failover_active", {
+        "current": target, "candidates": candidates,
+        "adguard_ip": ctx["adguard_ip"], "pending": 0, "pending_target": "",
+    })
+    return detail
 
 
 async def _revert_dns_failover(rem: "Remediator", ctx: dict) -> str:
@@ -258,8 +291,9 @@ SPECS: list[ActionSpec] = [
     ),
     ActionSpec(
         "unifi.dns_failover", "auto",
-        lambda c: f"Fail over LAN DNS to {c.get('failover_dns', '?')} "
-                  "(reverts when AdGuard recovers)",
+        lambda c: "Fail over LAN DNS ("
+                  + " → ".join(c.get("candidates") or ["?"])
+                  + ", best healthy wins; reverts when AdGuard recovers)",
         _match_dns_failover, _exec_dns_failover, lifeline=True,
         reverter=_revert_dns_failover,
     ),
@@ -498,6 +532,38 @@ class Remediator:
             log.warning("reverted action %s on %s: %s", act["action"], act["target"], detail)
             self.notifier.raw(f"Reverted: {act['label']}", detail,
                               priority=3, tags=["rewind"])
+
+    async def maintain_failover(self) -> None:
+        """While DNS failover is active, keep LAN DNS on the best healthy
+        candidate: abandon the current target if it dies, return to a
+        preferred (earlier) candidate when it recovers. Two consecutive
+        sweeps must agree before re-pointing (damping)."""
+        state = self.db.kv_get_json("unifi.dns_failover_active") or {}
+        if not state.get("current") or "unifi" not in self.collectors:
+            return
+        best = await _pick_dns_candidate(state["candidates"])
+        if best is None or best == state["current"]:
+            state["pending"], state["pending_target"] = 0, ""
+            self.db.kv_set_json("unifi.dns_failover_active", state)
+            return
+        if state.get("pending_target") == best:
+            state["pending"] = state.get("pending", 0) + 1
+        else:
+            state["pending"], state["pending_target"] = 1, best
+        if state["pending"] >= 2:
+            previous = state["current"]
+            detail = await self.collectors["unifi"].dns_failover(
+                state["adguard_ip"], best
+            )
+            state = {"current": best, "candidates": state["candidates"],
+                     "adguard_ip": state["adguard_ip"],
+                     "pending": 0, "pending_target": ""}
+            log.warning("DNS failover re-pointed %s -> %s", previous, best)
+            self.notifier.raw(
+                f"DNS failover re-pointed: {previous} → {best}", detail,
+                priority=4, tags=["arrows_counterclockwise"],
+            )
+        self.db.kv_set_json("unifi.dns_failover_active", state)
 
     async def deny(self, action_id: int, token: str) -> tuple[bool, str]:
         act = self.db.query_one("SELECT * FROM actions WHERE id=?", (action_id,))

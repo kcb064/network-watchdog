@@ -263,19 +263,23 @@ class UnifiCollector(Collector):
 
     async def dns_failover(self, dns_ip: str, failover_dns: str) -> str:
         """Point DHCP DNS of every network currently using dns_ip at
-        failover_dns; remember the originals for dns_failback()."""
-        nets = await self.client.get("rest/networkconf")
-        saved = select_dns_networks(nets, dns_ip)
+        failover_dns; remember the originals for dns_failback(). Re-pointing
+        to a different target mid-outage reuses the saved originals — they
+        are only captured once, so failback always restores the true config."""
+        saved = self.db.kv_get_json("unifi.dns_failover_saved") or {}
         if not saved:
-            raise RuntimeError(
-                f"no UniFi networks hand out {dns_ip} via DHCP — nothing to fail over"
-            )
+            nets = await self.client.get("rest/networkconf")
+            saved = select_dns_networks(nets, dns_ip)
+            if not saved:
+                raise RuntimeError(
+                    f"no UniFi networks hand out {dns_ip} via DHCP — nothing to fail over"
+                )
+            self.db.kv_set_json("unifi.dns_failover_saved", saved)
         for net_id in saved:
             body = {k: "" for k in DNS_KEYS}
             body["dhcpd_dns_1"] = failover_dns
             body["dhcpd_dns_enabled"] = True
             await self.client.put(f"rest/networkconf/{net_id}", body)
-        self.db.kv_set_json("unifi.dns_failover_saved", saved)
         names = ", ".join(v["name"] or k for k, v in saved.items())
         return (f"DHCP DNS → {failover_dns} on: {names}. Clients pick it up as "
                 "their leases renew.")
@@ -291,4 +295,5 @@ class UnifiCollector(Collector):
             await self.client.put(f"rest/networkconf/{net_id}", body)
             names.append(vals.get("name") or net_id)
         self.db.kv_set_json("unifi.dns_failover_saved", {})
+        self.db.kv_set_json("unifi.dns_failover_active", {})
         return f"restored original DHCP DNS on: {', '.join(names)}"

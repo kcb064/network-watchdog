@@ -359,8 +359,16 @@ def seed_restart_attempts(db, when: list[float]):
     db.kv_set_json("act_hist:adguard.restart_ha_addon:AdGuard Home add-on", when)
 
 
-def test_chain_advances_to_dns_failover_when_restarts_exhausted(env):
+def patch_dns_health(monkeypatch, healthy: set):
+    async def fake_responds(server, timeout=3.0):
+        return server in healthy
+
+    monkeypatch.setattr("netwatch.remediate._dns_responds", fake_responds)
+
+
+def test_chain_advances_to_dns_failover_when_restarts_exhausted(env, monkeypatch):
     db, cfg, docker, rem, incident = env
+    patch_dns_health(monkeypatch, {"1.1.1.1"})
     rem.collectors["ha"] = FakeHA()
     unifi = FakeUnifi()
     rem.collectors["unifi"] = unifi
@@ -373,6 +381,93 @@ def test_chain_advances_to_dns_failover_when_restarts_exhausted(env):
     assert ok and unifi.failovers == [("192.168.1.28", "1.1.1.1")]
     row = db.query_one("SELECT * FROM actions WHERE id=?", (plan[1]["id"],))
     assert row["verify_deadline"] is None  # mitigation: no "didn't help" alarm
+
+
+def multi_candidate_check():
+    return CheckResult(
+        "adguard.api", FAIL, "unreachable",
+        meta={
+            "name": "AdGuard Home",
+            "remediation_fallbacks": [
+                {"kind": "dns_failover", "adguard_ip": "192.168.1.28",
+                 "candidates": ["192.168.1.250", "1.1.1.1"], "name": "LAN DNS"},
+            ],
+        },
+    )
+
+
+def test_failover_picks_first_healthy_candidate(env, monkeypatch):
+    db, cfg, docker, rem, incident = env
+    patch_dns_health(monkeypatch, {"192.168.1.250", "1.1.1.1"})
+    unifi = FakeUnifi()
+    rem.collectors["unifi"] = unifi
+    plan = asyncio.run(rem.consider(incident, multi_candidate_check()))
+    assert plan is not None and plan[0] == "auto"
+    ok, _ = asyncio.run(rem.execute(plan[1]))
+    assert ok and unifi.failovers == [("192.168.1.28", "192.168.1.250")]
+    state = db.kv_get_json("unifi.dns_failover_active")
+    assert state["current"] == "192.168.1.250"
+
+
+def test_failover_skips_dead_candidate(env, monkeypatch):
+    db, cfg, docker, rem, incident = env
+    patch_dns_health(monkeypatch, {"1.1.1.1"})  # secondary AdGuard also down
+    unifi = FakeUnifi()
+    rem.collectors["unifi"] = unifi
+    plan = asyncio.run(rem.consider(incident, multi_candidate_check()))
+    ok, _ = asyncio.run(rem.execute(plan[1]))
+    assert ok and unifi.failovers == [("192.168.1.28", "1.1.1.1")]
+
+
+def test_failover_fails_when_nothing_answers(env, monkeypatch):
+    db, cfg, docker, rem, incident = env
+    patch_dns_health(monkeypatch, set())
+    rem.collectors["unifi"] = FakeUnifi()
+    plan = asyncio.run(rem.consider(incident, multi_candidate_check()))
+    ok, detail = asyncio.run(rem.execute(plan[1]))
+    assert not ok and "no failover DNS candidate" in detail
+
+
+def seed_active_failover(db, current: str):
+    db.kv_set_json("unifi.dns_failover_active", {
+        "current": current, "candidates": ["192.168.1.250", "1.1.1.1"],
+        "adguard_ip": "192.168.1.28", "pending": 0, "pending_target": "",
+    })
+
+
+def test_maintain_failover_escalates_when_target_dies(env, monkeypatch):
+    db, cfg, docker, rem, incident = env
+    unifi = FakeUnifi()
+    rem.collectors["unifi"] = unifi
+    seed_active_failover(db, "192.168.1.250")
+    patch_dns_health(monkeypatch, {"1.1.1.1"})  # current target went dark
+    asyncio.run(rem.maintain_failover())
+    assert unifi.failovers == []  # damping: first strike only
+    asyncio.run(rem.maintain_failover())
+    assert unifi.failovers == [("192.168.1.28", "1.1.1.1")]
+    assert db.kv_get_json("unifi.dns_failover_active")["current"] == "1.1.1.1"
+    assert any("re-pointed" in t for t in rem.notifier.raws)
+
+
+def test_maintain_failover_upgrades_back_to_preferred(env, monkeypatch):
+    db, cfg, docker, rem, incident = env
+    unifi = FakeUnifi()
+    rem.collectors["unifi"] = unifi
+    seed_active_failover(db, "1.1.1.1")
+    patch_dns_health(monkeypatch, {"192.168.1.250", "1.1.1.1"})  # secondary is back
+    asyncio.run(rem.maintain_failover())
+    asyncio.run(rem.maintain_failover())
+    assert unifi.failovers == [("192.168.1.28", "192.168.1.250")]
+
+
+def test_maintain_failover_steady_state_noop(env, monkeypatch):
+    db, cfg, docker, rem, incident = env
+    rem.collectors["unifi"] = FakeUnifi()
+    seed_active_failover(db, "192.168.1.250")
+    patch_dns_health(monkeypatch, {"192.168.1.250", "1.1.1.1"})
+    asyncio.run(rem.maintain_failover())
+    asyncio.run(rem.maintain_failover())
+    assert rem.collectors["unifi"].failovers == []
 
 
 def test_chain_does_not_advance_before_exhaustion(env):
