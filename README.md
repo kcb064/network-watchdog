@@ -1,6 +1,7 @@
 # 🐕 Network Watchdog
 
 [![CI](https://github.com/kcb064/network-watchdog/actions/workflows/ci.yml/badge.svg)](https://github.com/kcb064/network-watchdog/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kcb064/network-watchdog)](https://github.com/kcb064/network-watchdog/releases)
 [![Image](https://img.shields.io/badge/ghcr.io-kcb064%2Fnetwork--watchdog-blue)](https://github.com/kcb064/network-watchdog/pkgs/container/network-watchdog)
 
 Self-hosted homelab health monitor for a TrueNAS SCALE + Dockge setup. Watches
@@ -209,7 +210,7 @@ it every minute, and healthchecks.io alerts you when the pings stop.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest tests        # 52 tests, pure-logic core
+.venv/bin/python -m pytest tests        # pure-logic core (90+ tests)
 .venv/bin/python -m netwatch --config config.example.yaml --data data
 ```
 
@@ -234,4 +235,9 @@ netwatch/
 - Generic ping/TCP/HTTP checks for arbitrary LAN devices
 - TLS certificate expiry countdowns
 - Daily/weekly digest notification
-- Claude-powered incident summaries ("what probably happened and why")
+- AI-proposed remediations from the action registry, gated by the existing
+  approval flow (Phase 2 of the analyst)
+- Smart-plug executors with direct local HTTP (Shelly/Tasmota) so power-cycle
+  rungs survive a Home Assistant outage
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.

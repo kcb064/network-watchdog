@@ -70,3 +70,6 @@ needs the Linux socket, fails gracefully here).
   multi-arch (amd64/arm64) image to ghcr.io/kcb064/network-watchdog with
   :latest + :sha-* tags (v* tags add semver). Repo + image are PUBLIC (MIT).
   Kevin's NAS deploys the GHCR image via Dockge, not a local build.
+- Release flow: bump `netwatch/__init__.py` __version__, add CHANGELOG.md
+  entry, push, then `gh release create vX.Y.Z` — the tag's CI run publishes
+  the `:X.Y.Z` image tag.
