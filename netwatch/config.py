@@ -270,6 +270,12 @@ def apply_env_overrides(cfg: Config) -> None:
         if action and tier.lower() in ("auto", "approve", "off"):
             cfg.remediation.overrides[action] = tier.lower()
 
+    # Explicit DNS probe list (comma-separated) — probe every resolver you rely
+    # on, e.g. primary AdGuard + secondary AdGuard + one public resolver.
+    dns_servers = os.environ.get("WAN_DNS_SERVERS", "")
+    if dns_servers:
+        cfg.wan.dns_servers = [s.strip() for s in dns_servers.split(",") if s.strip()]
+
 
 def load_config(path: str | Path | None) -> Config:
     data: dict = {}

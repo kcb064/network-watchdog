@@ -37,6 +37,8 @@ services:
       ADGUARD_URL: ${ADGUARD_URL:-}
       ADGUARD_USERNAME: ${ADGUARD_USERNAME:-}
       ADGUARD_PASSWORD: ${ADGUARD_PASSWORD:-}
+      # Probe these resolvers explicitly (e.g. primary + secondary AdGuard + 1.1.1.1):
+      WAN_DNS_SERVERS: ${WAN_DNS_SERVERS:-}
 
       # -- TrueNAS (UI → user icon → API Keys)
       TRUENAS_URL: ${TRUENAS_URL:-}

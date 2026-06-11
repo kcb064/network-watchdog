@@ -63,6 +63,7 @@ Per-service checks:
 | `UNIFI_URL`, `UNIFI_USERNAME`, `UNIFI_PASSWORD` | UniFi monitoring |
 | `HA_URL`, `HA_TOKEN` (+ `HA_CONTAINER`) | Home Assistant monitoring (+ restart remediation) |
 | `ADGUARD_URL`, `ADGUARD_USERNAME`, `ADGUARD_PASSWORD` | AdGuard monitoring + protection re-enable |
+| `WAN_DNS_SERVERS` | Explicit resolver probe list (comma-separated) — use when running redundant DNS |
 | `TRUENAS_URL`, `TRUENAS_API_KEY` | Pool health, alerts, capacity predictions |
 | `WATCHDOG_PASSWORD` | Dashboard basic auth (user `admin`) |
 | `HEARTBEAT_URL` | Dead man's switch (healthchecks.io) |

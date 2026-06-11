@@ -85,6 +85,12 @@ def test_remediation_overrides_env(tmp_path, monkeypatch):
     }
 
 
+def test_wan_dns_servers_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("WAN_DNS_SERVERS", "192.168.1.28, 192.168.1.250,1.1.1.1")
+    cfg = load_config(tmp_path / "absent.yaml")
+    assert cfg.wan.dns_servers == ["192.168.1.28", "192.168.1.250", "1.1.1.1"]
+
+
 def test_self_heal_env_vars(tmp_path, monkeypatch):
     monkeypatch.setenv("ADGUARD_HA_ADDON", "a0d7b954_adguard")
     monkeypatch.setenv("WAN_POWER_CYCLE_ENTITY", "switch.modem_plug")
